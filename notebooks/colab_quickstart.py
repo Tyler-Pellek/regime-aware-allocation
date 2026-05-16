@@ -9,8 +9,8 @@ Expects:
 # fmt: off
 COLAB_SETUP = r"""
 # === Cell 1: clone + install ===
-!git clone https://github.com/<YOU>/ParagonProject.git /content/ParagonProject || true
-%cd /content/ParagonProject
+!git clone https://github.com/Tyler-Pellek/regime-aware-allocation.git /content/paragon || true
+%cd /content/paragon
 !pip install -q -r requirements.txt
 
 # === Cell 2: Kaggle credentials ===
