@@ -1,0 +1,67 @@
+# Paragon default config — mega-cap tech, 2005-2020, weekly rebalance.
+
+seed: 42
+artifacts_dir: artifacts/reports/default
+
+data:
+  kaggle_root: data/raw/kaggle_stock_market
+  macro_cache: data/cache/macro.parquet
+  start: "2003-01-01"     # extra warmup before the backtest start
+  end:   "2020-04-01"
+
+universe:
+  # Override TECH_UNIVERSE here if desired; null = use the canonical list.
+  tickers: null
+  min_history: 60         # bars required before an asset enters attention
+
+regime:
+  n_states: 3
+  covariance_type: "full"
+  n_iter: 200
+
+model:
+  d_model: 128
+  n_heads: 8
+  n_layers: 4
+  ff_mult: 4
+  dropout: 0.1
+  chol_min_diag: 0.0001
+
+training:
+  window: 60              # W trailing days
+  horizon: 5              # weekly forward target
+  batch_size: 32
+  epochs: 30
+  lr: 0.0003
+  weight_decay: 0.0001
+  grad_clip: 1.0
+  val_fraction: 0.15
+  early_stop_patience: 6
+  device: "cuda"          # "cuda" | "mps" | "cpu" — auto-fallback
+
+cvar:
+  alpha: 0.95
+  turnover_lambda: 0.0005
+  long_only: true
+  w_min: 0.0
+  w_max: 0.30
+  gross_max: 1.0
+  cash_allowed: false     # sum(w) == 1; required for the optimizer to actually
+                          # allocate. With cash_allowed=true the min-CVaR
+                          # objective trivially picks w=0 unless mu predictions
+                          # dominate the tail penalty (validated empirically in
+                          # the midsize local run: see artifacts/reports/midsize).
+  solver: "CLARABEL"
+
+backtest:
+  start: "2005-01-03"
+  end:   "2020-04-01"
+  initial_train_end: "2010-12-31"
+  rebal_freq_days: 5
+  fold_test_days: 252
+  train_lookback_days: null   # null = expanding window
+  transaction_cost_bps: 2.0
+  baselines:
+    - equal_weight
+    - inverse_vol
+    - sample_cov_cvar

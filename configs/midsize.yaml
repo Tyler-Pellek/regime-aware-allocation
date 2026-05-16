@@ -1,0 +1,65 @@
+# Mid-size local validation. Big enough that the model actually trains through
+# and the optimizer takes real positions; small enough to run on a Mac CPU in
+# a few minutes. Use this before burning A100 time to decide if the
+# architecture is producing informative covariance forecasts.
+
+seed: 42
+artifacts_dir: artifacts/reports/midsize
+
+data:
+  kaggle_root: data/raw/kaggle_stock_market
+  macro_cache: data/cache/macro.parquet
+  start: "2007-01-01"
+  end:   "2014-12-31"
+
+universe:
+  tickers: null
+  min_history: 60
+
+regime:
+  n_states: 3
+  covariance_type: "full"
+  n_iter: 150
+
+model:
+  d_model: 64
+  n_heads: 4
+  n_layers: 3
+  ff_mult: 2
+  dropout: 0.10
+  chol_min_diag: 0.0001
+
+training:
+  window: 60
+  horizon: 5
+  batch_size: 32
+  epochs: 15
+  lr: 0.0005
+  weight_decay: 0.0001
+  grad_clip: 1.0
+  val_fraction: 0.15
+  early_stop_patience: 5
+  device: "cpu"
+
+cvar:
+  alpha: 0.95
+  turnover_lambda: 0.0005
+  long_only: true
+  w_min: 0.0
+  w_max: 0.35
+  gross_max: 1.0
+  cash_allowed: false   # force sum(w)=1 — see whether learned Σ beats sample Σ
+  solver: "CLARABEL"
+
+backtest:
+  start: "2008-06-01"
+  end:   "2014-12-31"
+  initial_train_end: "2010-12-31"
+  rebal_freq_days: 5
+  fold_test_days: 252
+  train_lookback_days: null
+  transaction_cost_bps: 2.0
+  baselines:
+    - equal_weight
+    - inverse_vol
+    - sample_cov_cvar

@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "paragon"
+version = "0.1.0"
+description = "Regime-Aware Dynamic Asset Allocation: Cross-Asset Transformer + CVaR optimizer"
+requires-python = ">=3.10"
+dynamic = ["dependencies"]
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}
+
+[tool.setuptools.packages.find]
+include = ["paragon*"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"

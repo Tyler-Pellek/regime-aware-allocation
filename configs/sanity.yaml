@@ -1,0 +1,63 @@
+# Local sanity-check config. Smaller everything; trains fast on CPU/MPS.
+# Verifies the full Kaggle -> features -> HMM -> Transformer -> CVaR -> report
+# pipeline on real data. Not a meaningful backtest — just a smoke run.
+
+seed: 42
+artifacts_dir: artifacts/reports/sanity
+
+data:
+  kaggle_root: data/raw/kaggle_stock_market
+  macro_cache: data/cache/macro.parquet
+  start: "2010-01-01"
+  end:   "2015-01-01"
+
+universe:
+  tickers: null
+  min_history: 30
+
+regime:
+  n_states: 2
+  covariance_type: "full"
+  n_iter: 100
+
+model:
+  d_model: 32
+  n_heads: 4
+  n_layers: 2
+  ff_mult: 2
+  dropout: 0.0
+  chol_min_diag: 0.0001
+
+training:
+  window: 30
+  horizon: 5
+  batch_size: 32
+  epochs: 5
+  lr: 0.001
+  weight_decay: 0.0001
+  grad_clip: 1.0
+  val_fraction: 0.2
+  early_stop_patience: 10
+  device: "cpu"      # MPS lacks some linalg ops; CPU is plenty for this size
+
+cvar:
+  alpha: 0.95
+  turnover_lambda: 0.0005
+  long_only: true
+  w_min: 0.0
+  w_max: 0.40
+  gross_max: 1.0
+  cash_allowed: true
+  solver: "CLARABEL"
+
+backtest:
+  start: "2011-06-01"        # leaves macro warmup room
+  end:   "2015-01-01"
+  initial_train_end: "2013-06-30"
+  rebal_freq_days: 10
+  fold_test_days: 252
+  train_lookback_days: null
+  transaction_cost_bps: 2.0
+  baselines:
+    - equal_weight
+    - inverse_vol
