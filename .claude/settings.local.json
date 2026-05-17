@@ -3,7 +3,9 @@
     "allow": [
       "Bash(git add *)",
       "Bash(git commit -m 'v11 + v11b: momentum-based mu signals regressed \\(Sharpe 0.78 + 0.80\\) *)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "Bash(PYTHONPATH=. python -u scripts/run_backtest.py --config configs/v14a_mom20.yaml)",
+      "Bash(echo \"v14a PID=$!\")"
     ]
   }
 }

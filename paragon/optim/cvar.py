@@ -239,9 +239,13 @@ def optimize_mean_variance(
 
     w = cp.Variable(k)
     if cfg.long_only:
-        constraints = [w >= cfg.w_min, w <= cfg.w_max]
+        # Long-only: floor at max(w_min, 0) so a configured negative w_min
+        # is ignored and shorts are forbidden.
+        constraints = [w >= max(cfg.w_min, 0.0), w <= cfg.w_max]
     else:
-        constraints = [w >= -cfg.w_max, w <= cfg.w_max]
+        # Long/short: honor w_min directly so the user can set asymmetric
+        # caps like (-0.10, +0.20). `gross_max` then caps total notional.
+        constraints = [w >= cfg.w_min, w <= cfg.w_max]
     if cfg.cash_allowed:
         constraints += [cp.sum(w) <= 1.0, cp.sum(w) >= max(0.0, cfg.min_invested)]
     else:

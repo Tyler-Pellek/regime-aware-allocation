@@ -106,10 +106,14 @@ class WalkForwardConfig:
                                               # optimizer:
                                               #   rolling_mean    : 60d sample mean (v7b default)
                                               #   momentum_12_1   : Jegadeesh-Titman 12mo - 1mo
-                                              #   momentum_blend  : 50/50 mean + 12-1 momentum
+                                              #   momentum_blend  : convex blend (1-w)*mean + w*momentum
                                               # 12-1 momentum captures the
                                               # cross-sectional anomaly that
                                               # rolling mean misses.
+    mu_blend_weight: float = 0.5              # weight on the 12-1 momentum
+                                              # term in momentum_blend. 0.5 = symmetric
+                                              # 50/50; 0.2 = mostly mean with mild
+                                              # momentum tilt; 0.8 = mostly momentum.
 
 
 @dataclass
@@ -206,6 +210,7 @@ def _infer_one(
     shrinkage_alpha: float = 1.0,
     use_model_mu: bool = True,
     mu_signal: str = "rolling_mean",
+    mu_blend_weight: float = 0.5,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Returns (mu, sigma, mask) at `date`.
 
@@ -267,7 +272,8 @@ def _infer_one(
                 mu = mu_mom
             else:                              # momentum_blend
                 mu_mean = rets_clean.mean(axis=0) * horizon
-                mu = 0.5 * mu_mean + 0.5 * mu_mom
+                w_m = float(mu_blend_weight)
+                mu = (1.0 - w_m) * mu_mean + w_m * mu_mom
         else:                                  # rolling_mean (default v7b)
             mu = rets_clean.mean(axis=0) * horizon
         mu = np.where(mask, mu, 0.0)
@@ -451,6 +457,7 @@ def run_walk_forward(
                             shrinkage_alpha=cfg.shrinkage_alpha,
                             use_model_mu=cfg.use_model_mu,
                             mu_signal=cfg.mu_signal,
+                            mu_blend_weight=cfg.mu_blend_weight,
                         )
                         sig_v = 0.5 * (sig_v + sig_v.T)
                         w_v, _ = optimize_portfolio(mu_v, sig_v, pw, mk_v, trial_cfg)
@@ -484,6 +491,7 @@ def run_walk_forward(
                 horizon=train_cfg.horizon, shrinkage_alpha=cfg.shrinkage_alpha,
                 use_model_mu=cfg.use_model_mu,
                 mu_signal=cfg.mu_signal,
+                mu_blend_weight=cfg.mu_blend_weight,
             )
             # Symmetrize Sigma defensively (matrix from PyTorch may have tiny asym).
             sigma = 0.5 * (sigma + sigma.T)
