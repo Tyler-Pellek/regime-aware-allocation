@@ -1,0 +1,38 @@
+# Pretraining config — universe-wide backbone training.
+# Produces artifacts/pretrained/backbone.pt for v8 fine-tuning.
+
+seed: 42
+universe_json: data/cache/pretrain_universe.json
+
+data:
+  kaggle_root: data/raw/kaggle_stock_market
+  macro_cache: data/cache/macro_extended.parquet
+  start: "2003-01-01"
+  end:   "2020-04-01"
+
+regime:
+  n_states: 3
+
+model:
+  d_model: 192
+  n_heads: 8
+  n_layers: 5
+  ff_mult: 4
+  dropout: 0.15
+  chol_min_diag: 0.01
+  n_factors: 4
+
+training:
+  window: 60
+  horizon: 5
+  batch_size: 32
+  n_assets_per_step: 24       # how many tickers we sample per training step
+  n_steps: 6000               # 6k steps x 32 batch x 24 assets x 5d horizon
+                              # = ~23M asset-day "observations" — vs ~10k
+                              # in a single fine-tune fold
+  lr: 0.0005
+  weight_decay: 0.0005
+  grad_clip: 1.0
+  device: cpu
+  log_every: 50
+  ckpt_every: 1000

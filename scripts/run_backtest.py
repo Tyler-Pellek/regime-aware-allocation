@@ -171,6 +171,7 @@ def main() -> None:
         use_model_mu=cfg.backtest.get("use_model_mu", True),
         warm_start=cfg.backtest.get("warm_start", False),
         warm_start_lr_scale=cfg.backtest.get("warm_start_lr_scale", 0.5),
+        pretrained_checkpoint=cfg.backtest.get("pretrained_checkpoint", None),
     )
 
     def make_model_cfg(F_asset: int, F_ctx: int, N: int) -> TransformerConfig:
@@ -186,6 +187,7 @@ def main() -> None:
             chol_min_diag=cfg.model.chol_min_diag,
             head_type=cfg.model.get("head_type", "standard"),
             n_factors=cfg.model.get("n_factors", 4),
+            use_asset_pos=cfg.model.get("use_asset_pos", True),
         )
 
     # ---------- 3. Walk-forward run ----------

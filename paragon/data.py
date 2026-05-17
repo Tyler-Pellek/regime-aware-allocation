@@ -314,11 +314,15 @@ def load_yfinance_ohlcv(
         return out
 
     LOG.info("Fetching yfinance OHLCV for %d tickers (post-Kaggle extension) ...", len(tickers))
+    # yfinance wants DATE-only strings; passing 'YYYY-MM-DD 00:00:00' raises
+    # ValueError: unconverted data remains. Format defensively.
+    start_str = pd.Timestamp(start).strftime("%Y-%m-%d")
+    end_str = pd.Timestamp(end).strftime("%Y-%m-%d") if end is not None else None
     out = {}
     for tk in tickers:
         try:
             df = yf.download(
-                tk, start=str(start), end=str(end) if end else None,
+                tk, start=start_str, end=end_str,
                 progress=False, auto_adjust=False, threads=False,
             )
         except Exception as exc:                       # pragma: no cover

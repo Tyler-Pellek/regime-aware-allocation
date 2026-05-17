@@ -46,6 +46,16 @@ class TransformerConfig:
                                    # is well-suited to data-scarce regimes
                                    # where N is large relative to training set.
     n_factors: int = 4             # only used when head_type='factor'
+    use_asset_pos: bool = True     # if False, the per-asset learned positional
+                                   # embedding is dropped. This makes the model
+                                   # truly permutation-invariant over assets,
+                                   # which is required for universe-transfer
+                                   # pretraining (train on 500 stocks, fine-tune
+                                   # on 16). Asset identity then comes purely
+                                   # from feature trajectories — the right
+                                   # inductive bias for a cross-asset model
+                                   # that should be a function of behavior, not
+                                   # ticker name. v8+ default.
 
 
 # --------------------------------------------------------------------------- #
@@ -55,21 +65,30 @@ class TransformerConfig:
 class TokenEmbedding(nn.Module):
     """Two-headed projection: separate linear layers for CTX and asset rows.
 
-    Asset tokens additionally receive a learned per-position embedding (so the
-    model can break the symmetry between, say, AAPL and MSFT). CTX gets its own
-    learned vector.
+    When `use_asset_pos=True`, asset tokens additionally receive a learned
+    per-position embedding (breaks symmetry between AAPL and MSFT). When
+    False, the model is permutation-invariant over assets — required for
+    universe-transfer pretraining.
     """
 
-    def __init__(self, n_assets: int, asset_in_dim: int, ctx_in_dim: int, d_model: int):
+    def __init__(
+        self, n_assets: int, asset_in_dim: int, ctx_in_dim: int, d_model: int,
+        use_asset_pos: bool = True,
+    ):
         super().__init__()
         self.asset_proj = nn.Linear(asset_in_dim, d_model)
         self.ctx_proj = nn.Linear(ctx_in_dim, d_model)
-        self.asset_pos = nn.Parameter(torch.randn(n_assets, d_model) * 0.02)
         self.ctx_pos = nn.Parameter(torch.randn(d_model) * 0.02)
+        if use_asset_pos:
+            self.asset_pos = nn.Parameter(torch.randn(n_assets, d_model) * 0.02)
+        else:
+            self.register_parameter("asset_pos", None)
 
     def forward(self, asset_feats: Tensor, ctx_feats: Tensor) -> Tensor:
         # asset_feats: (B, N, F_a)   ctx_feats: (B, F_c)
-        a = self.asset_proj(asset_feats) + self.asset_pos.unsqueeze(0)   # (B, N, d)
+        a = self.asset_proj(asset_feats)                                  # (B, N, d)
+        if self.asset_pos is not None:
+            a = a + self.asset_pos.unsqueeze(0)
         c = self.ctx_proj(ctx_feats) + self.ctx_pos                       # (B, d)
         seq = torch.cat([c.unsqueeze(1), a], dim=1)                       # (B, N+1, d)
         return seq
@@ -158,7 +177,10 @@ class CrossAssetTransformer(nn.Module):
     def __init__(self, cfg: TransformerConfig):
         super().__init__()
         self.cfg = cfg
-        self.embed = TokenEmbedding(cfg.n_assets, cfg.asset_in_dim, cfg.ctx_in_dim, cfg.d_model)
+        self.embed = TokenEmbedding(
+            cfg.n_assets, cfg.asset_in_dim, cfg.ctx_in_dim, cfg.d_model,
+            use_asset_pos=cfg.use_asset_pos,
+        )
         self.blocks = nn.ModuleList([
             TransformerBlock(cfg.d_model, cfg.n_heads, cfg.ff_mult, cfg.dropout)
             for _ in range(cfg.n_layers)

@@ -88,6 +88,12 @@ class WalkForwardConfig:
     warm_start_lr_scale: float = 0.5    # multiplier applied to the base lr
                                         # when warm-starting (fine-tuning
                                         # naturally wants a lower LR).
+    pretrained_checkpoint: str | None = None  # optional path to a pretrain.py
+                                              # checkpoint. When given, fold 0
+                                              # warm-starts from it instead of
+                                              # random init. Subsequent folds
+                                              # warm-start from fold N-1 as
+                                              # usual.
 
 
 @dataclass
@@ -293,6 +299,16 @@ def run_walk_forward(
     device = None  # set after first model train
     warm_state: dict | None = None   # carries previous fold's model weights
 
+    # Optional pretrained backbone — fold 0 starts from this instead of random init.
+    if cfg.pretrained_checkpoint:
+        ck = Path(cfg.pretrained_checkpoint)
+        if ck.is_file():
+            LOG.info("Loading pretrained backbone from %s", ck)
+            blob = torch.load(ck, map_location="cpu", weights_only=False)
+            warm_state = blob["state_dict"]
+        else:
+            LOG.warning("pretrained_checkpoint %s not found — falling back to random init.", ck)
+
     for fold_idx, (train_end, test_end) in enumerate(folds):
         LOG.info("\n=== Fold %d : train<=%s, test<=%s ===", fold_idx, train_end.date(), test_end.date())
 
@@ -331,16 +347,26 @@ def run_walk_forward(
         F_asset = train_cfg.window + 2 + bundle.n_ohlcv_feats
         F_ctx = bundle.regime_probs.shape[1] + bundle.macro_feats.shape[1]
         model_cfg = model_cfg_factory(F_asset, F_ctx, N)
+        # warm_state precedence:
+        #   fold 0 + pretrained_checkpoint  -> pretrained backbone
+        #   fold N>0 + warm_start            -> previous fold's weights
+        #   otherwise                         -> random init
+        if fold_idx == 0:
+            init_state = warm_state           # may be from pretrained_checkpoint
+        elif cfg.warm_start:
+            init_state = warm_state           # carried from previous fold
+        else:
+            init_state = None
         model, _hist = train_model(
             bundle=bundle,
             decision_dates=train_dates,
             model_cfg=model_cfg,
             train_cfg=train_cfg,
             save_path=(artifacts_dir / f"model_fold{fold_idx}.pt") if artifacts_dir else None,
-            warm_start_state=warm_state if cfg.warm_start else None,
+            warm_start_state=init_state,
             warm_start_lr_scale=cfg.warm_start_lr_scale,
         )
-        if cfg.warm_start:
+        if cfg.warm_start or (fold_idx == 0 and cfg.pretrained_checkpoint):
             warm_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
         from ..training.trainer import select_device
         device = select_device(train_cfg.device)

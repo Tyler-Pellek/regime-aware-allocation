@@ -1,0 +1,34 @@
+# Smoke-test version of pretrain.yaml — 100 steps, tiny model, fast iteration.
+seed: 42
+universe_json: data/cache/pretrain_universe.json
+
+data:
+  kaggle_root: data/raw/kaggle_stock_market
+  macro_cache: data/cache/macro_extended.parquet
+  start: "2003-01-01"
+  end:   "2020-04-01"
+
+regime:
+  n_states: 3
+
+model:
+  d_model: 64
+  n_heads: 4
+  n_layers: 2
+  ff_mult: 2
+  dropout: 0.1
+  chol_min_diag: 0.01
+  n_factors: 4
+
+training:
+  window: 60
+  horizon: 5
+  batch_size: 16
+  n_assets_per_step: 16
+  n_steps: 100
+  lr: 0.001
+  weight_decay: 0.0005
+  grad_clip: 1.0
+  device: cpu
+  log_every: 20
+  ckpt_every: 100
