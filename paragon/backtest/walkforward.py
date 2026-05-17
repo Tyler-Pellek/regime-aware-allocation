@@ -36,7 +36,7 @@ from ..model.cholesky import sigma_from_L
 from ..model.input_builder import build_snapshot, collate_snapshots
 from ..model.transformer import CrossAssetTransformer, TransformerConfig
 from ..optim.baselines import BASELINES
-from ..optim.cvar import CVaRConfig, optimize_cvar, optimize_portfolio
+from ..optim.cvar import CVaRConfig, optimize_cvar, optimize_mean_cvar, optimize_portfolio
 from ..regime.hmm import HMMConfig, RegimeHMM, make_regime_signal
 from ..training.trainer import TrainConfig, train_model
 from ..utils.logging import get_logger
@@ -316,6 +316,40 @@ def _infer_one(
 # Realized return between two decision dates
 # --------------------------------------------------------------------------- #
 
+def _bootstrap_h_day_scenarios(
+    rets: pd.DataFrame,
+    end_date: pd.Timestamp,
+    h: int,
+    n_samples: int,
+    lookback_days: int = 504,
+    rng: np.random.Generator | None = None,
+) -> np.ndarray:
+    """Block-bootstrap h-day cumulative log return scenarios.
+
+    For each scenario, pick a random starting date within the trailing
+    `lookback_days` window, sum the next `h` daily log returns. Repeat
+    `n_samples` times to build an (n_samples, N) scenario matrix. This
+    preserves intraday/cross-asset structure and captures real fat tails.
+
+    Returns:
+        scenarios: (n_samples, N) of forward-h-day return vectors
+    """
+    rng = rng or np.random.default_rng(42)
+    end_pos = rets.index.get_indexer([end_date], method="ffill")[0]
+    start_pos = max(0, end_pos - lookback_days + 1)
+    available = rets.iloc[start_pos : end_pos + 1].values  # (T_avail, N)
+    available = np.nan_to_num(available, nan=0.0)
+    T_avail, N = available.shape
+    if T_avail < h + 5:
+        # Not enough history; fall back to zero scenarios (degenerate)
+        return np.zeros((n_samples, N))
+    starts = rng.integers(0, T_avail - h, size=n_samples)
+    scenarios = np.stack(
+        [available[s : s + h].sum(axis=0) for s in starts], axis=0
+    )  # (n_samples, N)
+    return scenarios
+
+
 def _realized_returns(
     prices: pd.DataFrame, t0: pd.Timestamp, t1: pd.Timestamp, weights: np.ndarray
 ) -> pd.Series:
@@ -527,7 +561,17 @@ def run_walk_forward(
             )
             # Symmetrize Sigma defensively (matrix from PyTorch may have tiny asym).
             sigma = 0.5 * (sigma + sigma.T)
-            new_w, info = optimize_portfolio(mu, sigma, prev_w, mask, fold_cvar_cfg)
+            if fold_cvar_cfg.mode == "cvar_scenario":
+                # Generate bootstrap scenarios from the trailing 2 years of daily returns
+                scenarios = _bootstrap_h_day_scenarios(
+                    bundle.returns, d, h=train_cfg.horizon,
+                    n_samples=fold_cvar_cfg.n_scenarios,
+                    lookback_days=504,
+                    rng=np.random.default_rng(42 + i),  # seed by step for reproducibility
+                )
+                new_w, info = optimize_mean_cvar(scenarios, mu, prev_w, mask, fold_cvar_cfg)
+            else:
+                new_w, info = optimize_portfolio(mu, sigma, prev_w, mask, fold_cvar_cfg)
             # Realized window: from d (exclusive) to next decision date (inclusive).
             d_next = test_dates[i + 1] if i + 1 < len(test_dates) else min(test_end, p.index[-1])
             ret_seg = _realized_returns(p, d, d_next, new_w)

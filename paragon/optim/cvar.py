@@ -34,13 +34,17 @@ from scipy.stats import norm
 
 @dataclass
 class CVaRConfig:
-    mode: str = "cvar"             # "cvar" (minimize CVaR) or "mv" (mean-variance:
-                                   # max mu'w - gamma/2 * w'Sigma w with vol cap).
-                                   # CVaR makes sense for single-asset-class
-                                   # universes; mean-variance is the right tool
-                                   # when bonds/cash-equivalents are in the
-                                   # universe (otherwise CVaR degenerates to
-                                   # parking in the lowest-vol asset).
+    mode: str = "cvar"             # "cvar" (minimize Gaussian closed-form CVaR),
+                                   # "mv" (max mu'w - gamma/2 * w'Sigma w),
+                                   # or "cvar_scenario" (mean-CVaR with
+                                   # bootstrapped historical return scenarios —
+                                   # captures real fat tails, skew, serial
+                                   # correlation; v18+).
+    n_scenarios: int = 500         # # bootstrap scenarios for cvar_scenario
+    cvar_gamma: float = 5.0        # weight on CVaR penalty in mean-CVaR
+                                   # objective: max mu'w - gamma * CVaR
+                                   # Calibrate so CVaR contribution is comparable
+                                   # to MV variance contribution.
     alpha: float = 0.95            # CVaR level (e.g., 0.95 = expected loss in worst 5%)
     risk_aversion: float = 20.0    # gamma in mean-variance. Higher = more
                                    # risk-averse. ~10-50 for weekly horizon.
@@ -302,6 +306,124 @@ def optimize_mean_variance(
         "vol_cap_binding": bool(
             cfg.vol_cap_weekly is not None and realized_vol >= cfg.vol_cap_weekly - 1e-5
         ),
+    }
+    return w_full, info
+
+
+# --------------------------------------------------------------------------- #
+# Mean-CVaR with bootstrapped historical scenarios (v18+)
+# --------------------------------------------------------------------------- #
+
+def optimize_mean_cvar(
+    scenarios: np.ndarray,       # (M, N) bootstrapped h-day scenario returns
+    mu: np.ndarray,              # (N,)  predicted forward expected return
+    prev_w: np.ndarray,
+    mask: np.ndarray,
+    cfg: CVaRConfig,
+) -> tuple[np.ndarray, dict]:
+    """Mean-CVaR optimizer using bootstrapped historical return scenarios.
+
+    Objective (maximize):
+        mu^T w  -  gamma * CVaR_alpha(scenarios, w)  -  lambda * ||w - w_prev||_1
+
+    CVaR_alpha is computed empirically from the scenario sample via the
+    Rockafellar-Uryasev LP formulation. Distinct from MV (which uses Sigma
+    only) and Gaussian CVaR (which uses Sigma + closed form) because the
+    scenarios capture REAL fat tails / skew / serial correlation from
+    historical data — the standard Gaussian assumption can't.
+
+    Constraints: same as optimize_mean_variance (sum=1 if !cash_allowed,
+    long-only or long+short via w_min/w_max, optional gross_max, optional
+    vol_cap_weekly).
+    """
+    M, N_total = scenarios.shape
+    active = np.where(mask)[0]
+    k = active.size
+    if k == 0:
+        return np.zeros(N_total), {"status": "no_active_assets"}
+
+    R = scenarios[:, active]
+    mu_a = mu[active]
+    prev_a = prev_w[active]
+
+    # Variables
+    w = cp.Variable(k)
+    eta = cp.Variable()
+    u = cp.Variable(M)
+
+    # CVaR via Rockafellar-Uryasev: CVaR = min over (eta, u) of
+    #   eta + 1/((1-alpha) * M) * sum(u_i)
+    # subject to u_i >= 0, u_i >= -r_i' w - eta
+    cvar = eta + (1.0 / ((1.0 - cfg.alpha) * M)) * cp.sum(u)
+
+    # Standard constraints (same as MV optimizer)
+    if cfg.long_only:
+        cons = [w >= max(cfg.w_min, 0.0), w <= cfg.w_max]
+    else:
+        cons = [w >= cfg.w_min, w <= cfg.w_max]
+    if cfg.cash_allowed:
+        cons += [cp.sum(w) <= 1.0, cp.sum(w) >= max(0.0, cfg.min_invested)]
+    else:
+        cons += [cp.sum(w) == 1.0]
+    if cfg.gross_max is not None:
+        cons += [cp.norm1(w) <= cfg.gross_max]
+    # Rockafellar-Uryasev epigraph constraints
+    cons += [u >= 0, u >= -R @ w - eta]
+
+    # Optional explicit vol cap (computed from scenario empirical cov)
+    if cfg.vol_cap_weekly is not None:
+        sample_cov = np.cov(R.T, ddof=0) + 1e-8 * np.eye(k)
+        try:
+            chol_s = np.linalg.cholesky(sample_cov)
+        except np.linalg.LinAlgError:
+            eigvals, eigvecs = np.linalg.eigh(sample_cov)
+            eigvals = np.clip(eigvals, 1e-8, None)
+            chol_s = np.linalg.cholesky((eigvecs * eigvals) @ eigvecs.T)
+        cons += [cp.norm(chol_s.T @ w, 2) <= cfg.vol_cap_weekly]
+
+    # Objective: max mu^T w - gamma * CVaR - lambda * turnover
+    turnover = cp.norm1(w - prev_a)
+    objective = cp.Minimize(
+        -mu_a @ w
+        + cfg.cvar_gamma * cvar
+        + cfg.turnover_lambda * turnover
+    )
+    problem = cp.Problem(objective, cons)
+
+    try:
+        problem.solve(solver=cfg.solver, verbose=False)
+    except Exception:
+        solved = False
+        for backup in ("ECOS", "SCS", "CLARABEL"):
+            if backup == cfg.solver:
+                continue
+            try:
+                problem.solve(solver=backup, verbose=False)
+                solved = True
+                break
+            except Exception:
+                continue
+        if not solved or w.value is None:
+            return prev_w * 0.0, {"status": "solver_failed"}
+
+    if w.value is None:
+        return prev_w * 0.0, {"status": problem.status}
+
+    w_active = np.asarray(w.value).flatten()
+    if cfg.long_only:
+        w_active = np.clip(w_active, 0.0, None)
+    w_full = np.zeros(N_total)
+    w_full[active] = w_active
+
+    cvar_val = float(eta.value + np.sum(np.maximum(0, -R @ w_active - eta.value)) /
+                     ((1.0 - cfg.alpha) * M))
+    info = {
+        "status": problem.status,
+        "expected_return": float(mu_a @ w_active),
+        "empirical_cvar": cvar_val,
+        "turnover_total": float(np.abs(w_full - prev_w).sum()),
+        "n_active": int(k),
+        "n_scenarios": int(M),
     }
     return w_full, info
 
