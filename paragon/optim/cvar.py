@@ -44,6 +44,13 @@ class CVaRConfig:
     alpha: float = 0.95            # CVaR level (e.g., 0.95 = expected loss in worst 5%)
     risk_aversion: float = 20.0    # gamma in mean-variance. Higher = more
                                    # risk-averse. ~10-50 for weekly horizon.
+    gamma_cv_grid: list[float] | None = None
+                                   # If set, the walkforward picks the gamma
+                                   # from this grid that maximizes Sharpe on
+                                   # a held-out validation window at the end
+                                   # of each fold's training data. Different
+                                   # regimes want different risk aversion;
+                                   # data-driven gamma adapts per fold.
     demean_mu: bool = False        # if True, subtract cross-sectional mean of mu
                                    # over active assets before optimization.
                                    # Converts absolute-return predictions into

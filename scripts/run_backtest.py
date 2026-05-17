@@ -145,6 +145,7 @@ def main() -> None:
         mode=cfg.cvar.get("mode", "cvar"),
         alpha=cfg.cvar.alpha,
         risk_aversion=cfg.cvar.get("risk_aversion", 20.0),
+        gamma_cv_grid=cfg.cvar.get("gamma_cv_grid", None),
         demean_mu=cfg.cvar.get("demean_mu", False),
         turnover_lambda=cfg.cvar.turnover_lambda,
         long_only=cfg.cvar.long_only,

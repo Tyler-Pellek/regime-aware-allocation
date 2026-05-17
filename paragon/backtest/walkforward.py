@@ -402,7 +402,50 @@ def run_walk_forward(
         for _seed_model in models:
             _seed_model.eval()
 
-        # ----- 5. Roll the test window with periodic rebalances -----
+        # ----- 5a. (Optional) Cross-validate gamma on a held-out window ----
+        # Take the last 20% of train_dates as validation. For each candidate
+        # gamma, simulate the strategy and pick the one with highest Sharpe.
+        # The chosen gamma is used for the test period. Different regimes
+        # want different risk aversion, and this lets each fold adapt.
+        fold_cvar_cfg = cvar_cfg
+        if cvar_cfg.gamma_cv_grid:
+            n_train = len(train_dates)
+            v_split = max(1, int(0.8 * n_train))
+            val_dates_in_fold = pd.DatetimeIndex([d for d in train_dates[v_split:] if d != p.index[-1]])
+            if len(val_dates_in_fold) >= 10:
+                from dataclasses import replace as _replace
+                best_g, best_val_sh = None, -np.inf
+                for g_trial in cvar_cfg.gamma_cv_grid:
+                    trial_cfg = _replace(cvar_cfg, risk_aversion=float(g_trial))
+                    val_rets = []
+                    pw = np.zeros(N)
+                    for j, d_v in enumerate(val_dates_in_fold):
+                        mu_v, sig_v, mk_v = _infer_one(
+                            models, bundle, d_v, train_cfg.window, pw, device,
+                            horizon=train_cfg.horizon,
+                            shrinkage_alpha=cfg.shrinkage_alpha,
+                            use_model_mu=cfg.use_model_mu,
+                        )
+                        sig_v = 0.5 * (sig_v + sig_v.T)
+                        w_v, _ = optimize_portfolio(mu_v, sig_v, pw, mk_v, trial_cfg)
+                        d_next = val_dates_in_fold[j + 1] if j + 1 < len(val_dates_in_fold) else train_end
+                        seg = _realized_returns(p, d_v, d_next, w_v)
+                        if not seg.empty:
+                            val_rets.append(seg)
+                        pw = w_v
+                    if val_rets:
+                        s = pd.concat(val_rets).sort_index().groupby(level=0).sum()
+                        sd = float(s.std(ddof=0))
+                        sh = float(s.mean() * np.sqrt(252) / sd) if sd > 1e-9 else -np.inf
+                        if sh > best_val_sh:
+                            best_val_sh = sh
+                            best_g = float(g_trial)
+                if best_g is not None:
+                    LOG.info("  fold %d CV: chosen gamma=%.1f (val Sharpe %.3f) from grid %s",
+                             fold_idx, best_g, best_val_sh, cvar_cfg.gamma_cv_grid)
+                    fold_cvar_cfg = _replace(cvar_cfg, risk_aversion=best_g)
+
+        # ----- 5b. Roll the test window with periodic rebalances -----
         test_dates = _decision_dates_in_window(p.index, train_end, test_end, cfg.rebal_freq_days)
         if len(test_dates) == 0:
             continue
@@ -417,7 +460,7 @@ def run_walk_forward(
             )
             # Symmetrize Sigma defensively (matrix from PyTorch may have tiny asym).
             sigma = 0.5 * (sigma + sigma.T)
-            new_w, info = optimize_portfolio(mu, sigma, prev_w, mask, cvar_cfg)
+            new_w, info = optimize_portfolio(mu, sigma, prev_w, mask, fold_cvar_cfg)
             # Realized window: from d (exclusive) to next decision date (inclusive).
             d_next = test_dates[i + 1] if i + 1 < len(test_dates) else min(test_end, p.index[-1])
             ret_seg = _realized_returns(p, d, d_next, new_w)
