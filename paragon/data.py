@@ -155,9 +155,22 @@ def fetch_macro(
     """
     symbols = symbols or DEFAULT_MACRO_SYMBOLS
     cache_path = Path(cache_path) if cache_path else None
+    start_ts = pd.Timestamp(start)
+    end_ts = pd.Timestamp(end) if end else None
     if cache_path and cache_path.is_file() and not refresh:
-        LOG.info("Loading macro cache from %s", cache_path)
-        return pd.read_parquet(cache_path)
+        cached = pd.read_parquet(cache_path)
+        # Only honor the cache if it actually covers the requested range —
+        # otherwise a narrow earlier cache silently clips a wider new request.
+        covers_start = cached.index.min() <= start_ts
+        covers_end = end_ts is None or cached.index.max() >= end_ts
+        if covers_start and covers_end:
+            LOG.info("Loading macro cache from %s", cache_path)
+            return cached
+        LOG.info(
+            "Macro cache range [%s, %s] does not cover requested [%s, %s] — refetching.",
+            cached.index.min().date(), cached.index.max().date(), start_ts.date(),
+            end_ts.date() if end_ts is not None else "now",
+        )
 
     import yfinance as yf
 
