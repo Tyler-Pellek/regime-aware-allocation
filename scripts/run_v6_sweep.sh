@@ -36,7 +36,7 @@ echo
 
 for cfg in "${CONFIGS[@]}"; do
   name=$(basename "${cfg}" .yaml)
-  out_dir="${LOG_DIR}/v6_${name#*_}"
+  out_dir="${LOG_DIR}/v6_${name}"
   log_file="${out_dir}/run.log"
 
   echo "------------------------------------------------------------"
