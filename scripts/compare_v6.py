@@ -12,14 +12,14 @@ from pathlib import Path
 import pandas as pd
 
 V6_NAMES = [
-    "tech_baseline",
-    "tech_warm",
-    "tech_warm_factor",
-    "tech_warm_factor_daily",
-    "multi_baseline",
-    "multi_warm",
-    "multi_warm_factor",
-    "multi_warm_factor_daily",
+    "01_tech_baseline",
+    "02_tech_warm",
+    "03_tech_warm_factor",
+    "04_tech_warm_factor_daily",
+    "05_multi_baseline",
+    "06_multi_warm",
+    "07_multi_warm_factor",
+    "08_multi_warm_factor_daily",
 ]
 
 
