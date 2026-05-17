@@ -195,6 +195,12 @@ def main() -> None:
             head_type=cfg.model.get("head_type", "standard"),
             n_factors=cfg.model.get("n_factors", 4),
             use_asset_pos=cfg.model.get("use_asset_pos", True),
+            use_temporal_encoder=cfg.model.get("use_temporal_encoder", False),
+            temporal_per_day_dim=cfg.model.get("temporal_per_day_dim", 1),
+            temporal_seq_len=cfg.model.get("temporal_seq_len", 60),
+            temporal_d_model=cfg.model.get("temporal_d_model", 48),
+            temporal_n_heads=cfg.model.get("temporal_n_heads", 4),
+            temporal_n_layers=cfg.model.get("temporal_n_layers", 2),
         )
 
     # ---------- 3. Walk-forward run ----------

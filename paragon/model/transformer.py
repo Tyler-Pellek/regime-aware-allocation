@@ -23,6 +23,7 @@ import torch
 from torch import Tensor, nn
 
 from .factor_head import FactorCholeskyHead
+from .temporal_encoder import TemporalEncoder
 
 
 # --------------------------------------------------------------------------- #
@@ -46,6 +47,20 @@ class TransformerConfig:
                                    # is well-suited to data-scarce regimes
                                    # where N is large relative to training set.
     n_factors: int = 4             # only used when head_type='factor'
+    # ----- Temporal encoder (v17+) -----
+    use_temporal_encoder: bool = False
+                                   # If True, per-asset history sequence is
+                                   # processed by a TemporalEncoder before
+                                   # entering the cross-asset transformer.
+                                   # The encoder's CLS-pooled output REPLACES
+                                   # the concatenated daily returns in the
+                                   # asset features.
+    temporal_per_day_dim: int = 1  # how many features per day in the temporal
+                                   # input (1 = return only)
+    temporal_seq_len: int = 60     # history length T_hist (must match window)
+    temporal_d_model: int = 48
+    temporal_n_heads: int = 4
+    temporal_n_layers: int = 2
     use_asset_pos: bool = True     # if False, the per-asset learned positional
                                    # embedding is dropped. This makes the model
                                    # truly permutation-invariant over assets,
@@ -177,8 +192,30 @@ class CrossAssetTransformer(nn.Module):
     def __init__(self, cfg: TransformerConfig):
         super().__init__()
         self.cfg = cfg
+        # Optional per-asset temporal encoder (v17+). When enabled, the
+        # asset_feats input dim seen by TokenEmbedding becomes
+        # (temporal_d_model + static_dim) instead of the original concatenated
+        # returns + static. Static dim = asset_in_dim - temporal_seq_len.
+        if cfg.use_temporal_encoder:
+            self.temporal_encoder = TemporalEncoder(
+                per_day_dim=cfg.temporal_per_day_dim,
+                d_temp=cfg.temporal_d_model,
+                n_heads=cfg.temporal_n_heads,
+                n_layers=cfg.temporal_n_layers,
+                max_seq_len=cfg.temporal_seq_len + 8,
+                dropout=cfg.dropout,
+            )
+            # Effective asset_in_dim after temporal encoding: temporal_d_model
+            # + (asset_in_dim - temporal_seq_len * per_day_dim) static features
+            self._effective_asset_in_dim = (
+                cfg.temporal_d_model
+                + (cfg.asset_in_dim - cfg.temporal_seq_len * cfg.temporal_per_day_dim)
+            )
+        else:
+            self.temporal_encoder = None
+            self._effective_asset_in_dim = cfg.asset_in_dim
         self.embed = TokenEmbedding(
-            cfg.n_assets, cfg.asset_in_dim, cfg.ctx_in_dim, cfg.d_model,
+            cfg.n_assets, self._effective_asset_in_dim, cfg.ctx_in_dim, cfg.d_model,
             use_asset_pos=cfg.use_asset_pos,
         )
         self.blocks = nn.ModuleList([
@@ -204,11 +241,28 @@ class CrossAssetTransformer(nn.Module):
         mask        : (B, N) bool, True = tradable. Will be inverted for
                       attention's key_padding_mask convention (True = ignore).
 
+        When `cfg.use_temporal_encoder=True`, the FIRST
+        `temporal_seq_len * temporal_per_day_dim` entries of asset_feats are
+        the per-day history (in chronological order, oldest first). The
+        TemporalEncoder summarizes that segment, and the remaining entries
+        are static features (vol, prev_w, OHLCV).
+
         Returns dict with:
           L     : (B, N, N) lower-triangular Cholesky factor
           mu    : (B, N) expected forward returns
         """
-        seq = self.embed(asset_feats, ctx_feats)                   # (B, N+1, d)
+        if self.temporal_encoder is not None:
+            T = self.cfg.temporal_seq_len
+            F = self.cfg.temporal_per_day_dim
+            B, N, _ = asset_feats.shape
+            hist_flat = asset_feats[:, :, : T * F]
+            static = asset_feats[:, :, T * F :]
+            history = hist_flat.reshape(B, N, T, F)
+            temporal_rep = self.temporal_encoder(history)          # (B, N, d_temp)
+            combined = torch.cat([temporal_rep, static], dim=-1)
+            seq = self.embed(combined, ctx_feats)
+        else:
+            seq = self.embed(asset_feats, ctx_feats)               # (B, N+1, d)
         # CTX is always attendable; assets follow `mask`.
         B, N = mask.shape
         ctx_keep = torch.ones(B, 1, dtype=torch.bool, device=mask.device)

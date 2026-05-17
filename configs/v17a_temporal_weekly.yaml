@@ -1,0 +1,96 @@
+artifacts_dir: artifacts/reports/v17a_temporal_weekly
+backtest:
+  baselines:
+  - equal_weight
+  - inverse_vol
+  - min_variance
+  - max_sharpe
+  - risk_parity
+  - sample_cov_cvar
+  end: '2024-12-31'
+  fold_test_days: 252
+  initial_train_end: '2007-12-31'
+  rebal_freq_days: 5
+  shrinkage_alpha: 0.7
+  start: '2005-01-03'
+  train_freq_days: 5
+  train_lookback_days: null
+  transaction_cost_bps: 2.0
+  use_model_mu: false
+  warm_start: true
+  warm_start_lr_scale: 0.5
+cvar:
+  alpha: 0.95
+  cash_allowed: false
+  demean_mu: false
+  gross_max: 1.0
+  long_only: true
+  min_invested: 0.0
+  mode: mv
+  risk_aversion: 25.0
+  solver: CLARABEL
+  turnover_lambda: 0.005
+  vol_cap_weekly: 0.04
+  w_max: 0.2
+  w_min: 0.0
+data:
+  end: '2024-12-31'
+  extend_via_yfinance: true
+  kaggle_root: data/raw/kaggle_stock_market
+  macro_cache: data/cache/macro_extended.parquet
+  start: '2003-01-01'
+  yfinance_cache: data/cache/yfinance_extension.parquet
+features:
+  extended_macro: true
+  include_ohlcv: true
+model:
+  chol_min_diag: 0.01
+  d_model: 192
+  dropout: 0.15
+  ff_mult: 4
+  head_type: factor
+  n_factors: 4
+  n_heads: 8
+  n_layers: 5
+  use_temporal_encoder: true
+  temporal_per_day_dim: 1
+  temporal_seq_len: 60
+  temporal_d_model: 48
+  temporal_n_heads: 4
+  temporal_n_layers: 2
+regime:
+  covariance_type: full
+  n_iter: 200
+  n_states: 3
+seed: 42
+training:
+  anchor_lambda: 0.0
+  batch_size: 32
+  device: cpu
+  early_stop_patience: 6
+  epochs: 30
+  grad_clip: 1.0
+  horizon: 5
+  lr: 0.0003
+  val_fraction: 0.15
+  weight_decay: 0.0005
+  window: 60
+universe:
+  min_history: 60
+  tickers:
+  - AAPL
+  - MSFT
+  - GOOGL
+  - AMZN
+  - FB
+  - NFLX
+  - NVDA
+  - TSLA
+  - ADBE
+  - CRM
+  - ORCL
+  - INTC
+  - CSCO
+  - QCOM
+  - IBM
+  - TXN

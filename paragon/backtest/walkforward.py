@@ -107,9 +107,13 @@ class WalkForwardConfig:
                                               #   rolling_mean    : 60d sample mean (v7b default)
                                               #   momentum_12_1   : Jegadeesh-Titman 12mo - 1mo
                                               #   momentum_blend  : convex blend (1-w)*mean + w*momentum
+                                              #   sharpe_momentum : 63d return / 63d std,
+                                              #                     cross-sectionally z-scored
                                               # 12-1 momentum captures the
                                               # cross-sectional anomaly that
-                                              # rolling mean misses.
+                                              # rolling mean misses; Sharpe-momentum
+                                              # additionally vol-normalizes
+                                              # (Asness-Moskowitz-Pedersen style).
     mu_blend_weight: float = 0.5              # weight on the 12-1 momentum
                                               # term in momentum_blend. 0.5 = symmetric
                                               # 50/50; 0.2 = mostly mean with mild
@@ -274,6 +278,34 @@ def _infer_one(
                 mu_mean = rets_clean.mean(axis=0) * horizon
                 w_m = float(mu_blend_weight)
                 mu = (1.0 - w_m) * mu_mean + w_m * mu_mom
+        elif mu_signal == "sharpe_momentum":
+            # Per-asset Sharpe ratio over a medium-term window (63 trading
+            # days ~ 3 months). Vol-normalized momentum — noisy assets get
+            # smaller weight even if they trended. Cross-sectionally z-scored
+            # for clean differentiation, then scaled to the typical weekly
+            # return magnitude so the optimizer's CVaR/MV balance is preserved.
+            lookback_sm = 63
+            start_sm = max(0, pos - lookback_sm + 1)
+            r_sm = bundle.returns.iloc[start_sm : pos + 1].values
+            r_sm = np.nan_to_num(r_sm, nan=0.0)
+            mean_per_asset = r_sm.mean(axis=0)
+            std_per_asset = r_sm.std(axis=0, ddof=0)
+            std_per_asset = np.where(std_per_asset > 1e-8, std_per_asset, 1.0)
+            sharpe_per_asset = mean_per_asset / std_per_asset      # per-day
+            # Cross-sectional z-score across ACTIVE assets so inactive don't
+            # warp the mean/std.
+            active = sharpe_per_asset[mask]
+            if active.size > 1:
+                am, asd = active.mean(), active.std(ddof=0)
+                if asd > 1e-8:
+                    sharpe_z = (sharpe_per_asset - am) / asd
+                else:
+                    sharpe_z = sharpe_per_asset - am
+            else:
+                sharpe_z = sharpe_per_asset
+            # Scale: typical weekly return magnitude ~0.005 → multiply z by
+            # 0.005 so a +2 z-score gives mu ~ 0.010 (twice typical weekly)
+            mu = sharpe_z * 0.005
         else:                                  # rolling_mean (default v7b)
             mu = rets_clean.mean(axis=0) * horizon
         mu = np.where(mask, mu, 0.0)
