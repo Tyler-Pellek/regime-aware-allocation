@@ -1,7 +1,6 @@
-"""Chart v7 (apples-to-apples + extended) vs v6_03 winner + all baselines.
+"""Final comprehensive chart: every Paragon version + every classical baseline.
 
-Loads return series from the existing v6_03 winner report AND the new v7 runs,
-overlays equity curves and prints a comparison table.
+Sets up the cleanest possible side-by-side comparison for the writeup.
 """
 from __future__ import annotations
 
@@ -13,29 +12,33 @@ import numpy as np
 import pandas as pd
 
 
-# (label, report_dir, series_name_in_dir, color, linewidth)
-# series_name_in_dir = "strategy" or "benchmark" or a baseline policy name
+# (label, report_dir, series_name, color, lw)
 SERIES = [
-    ("Paragon v8 PRETRAINED (200-ticker backbone)",
-     "v8_pretrained",               "strategy",        "#370617", 3.0),
-    ("Paragon v7b normalized features",
-     "v7b_normalized",              "strategy",        "#9d0208", 2.2),
-    ("Paragon v6_03 (no features)",
-     "v6_03_winner_full_baselines", "strategy",        "#d62728", 1.6),
-    ("Max Sharpe (tangency)",
-     "v6_03_winner_full_baselines", "max_sharpe",      "#1f77b4", 1.2),
-    ("Markowitz MV (sample stats)",
-     "v6_03_winner_full_baselines", "sample_cov_cvar", "#ff7f0e", 1.2),
-    ("Equal weight (1/N)",
-     "v6_03_winner_full_baselines", "equal_weight",    "#2ca02c", 1.2),
-    ("Risk parity (ERC)",
-     "v6_03_winner_full_baselines", "risk_parity",     "#8c564b", 1.0),
-    ("Inverse vol",
-     "v6_03_winner_full_baselines", "inverse_vol",     "#9467bd", 1.0),
-    ("Minimum variance",
-     "v6_03_winner_full_baselines", "min_variance",    "#7f7f7f", 1.0),
-    ("SPY benchmark",
-     "v6_03_winner_full_baselines", "benchmark",       "#17becf", 1.0),
+    # Extended-window strategies (2008-2024)
+    ("Paragon v7b EXTENDED (2008-2024)",
+     "v7b_extended",                "strategy",        "#9d0208", 3.0),
+    ("Paragon v8 pretrained EXTENDED",
+     "v8_pretrained_extended",      "strategy",        "#370617", 2.5),
+    # Apples-to-apples winners (2008-2020)
+    ("Paragon v7b (2008-2020)",
+     "v7b_normalized",              "strategy",        "#e85d04", 1.8),
+    ("Paragon v6_03 (2008-2020)",
+     "v6_03_winner_full_baselines", "strategy",        "#dc2f02", 1.4),
+    # Baselines from the EXTENDED period
+    ("Max Sharpe (tangency) [2008-2024]",
+     "v7b_extended",                "max_sharpe",      "#1f77b4", 1.3),
+    ("Markowitz MV [2008-2024]",
+     "v7b_extended",                "sample_cov_cvar", "#ff7f0e", 1.3),
+    ("Equal weight (1/N) [2008-2024]",
+     "v7b_extended",                "equal_weight",    "#2ca02c", 1.3),
+    ("Risk parity (ERC) [2008-2024]",
+     "v7b_extended",                "risk_parity",     "#8c564b", 1.1),
+    ("Inverse vol [2008-2024]",
+     "v7b_extended",                "inverse_vol",     "#9467bd", 1.0),
+    ("Minimum variance [2008-2024]",
+     "v7b_extended",                "min_variance",    "#7f7f7f", 1.0),
+    ("SPY benchmark [2008-2024]",
+     "v7b_extended",                "benchmark",       "#17becf", 1.0),
 ]
 
 
@@ -69,24 +72,18 @@ def summarize(rets: pd.Series) -> dict:
 
 
 def main():
-    out_dir = Path("artifacts/reports/v7_comparison")
-    out_dir.mkdir(parents=True, exist_ok=True)
+    out = Path("artifacts/reports/final_chart"); out.mkdir(parents=True, exist_ok=True)
 
     data = []
     for label, report, series, color, lw in SERIES:
         r = load_returns(report, series)
         if r.empty:
-            print(f"  (skipping {label}: not found in {report})")
+            print(f"  (skipping {label}: not found)")
             continue
-        data.append({"label": label, "color": color, "lw": lw, "rets": r,
-                     "metrics": summarize(r)})
+        data.append({"label": label, "color": color, "lw": lw, "rets": r, "metrics": summarize(r)})
 
-    if not data:
-        print("No series found!")
-        return
-
-    # ---- Equity curves chart ----
-    fig, ax = plt.subplots(figsize=(14, 7))
+    # ---- Equity curves ----
+    fig, ax = plt.subplots(figsize=(15, 8))
     for d in data:
         eq = (1.0 + d["rets"]).cumprod()
         m = d["metrics"]
@@ -95,14 +92,14 @@ def main():
                  f"MaxDD={m['max_dd']*100:.1f}%)")
         ax.plot(eq.index, eq.values, label=label, color=d["color"], lw=d["lw"])
     ax.set_yscale("log")
-    ax.set_title("Paragon v7 vs v6_03 vs classical baselines\n"
-                 "Walk-forward backtest on 16 mega-cap tech",
-                 fontsize=12)
+    ax.set_title("Paragon vs classical baselines — full lineage\n"
+                 "16 mega-cap tech, walk-forward backtest, 2008-2020 and 2008-2024",
+                 fontsize=13)
     ax.set_ylabel("Cumulative wealth (log scale, start = $1)")
     ax.grid(True, alpha=0.3, which="both")
-    ax.legend(loc="upper left", fontsize=8, framealpha=0.92)
+    ax.legend(loc="upper left", fontsize=7.5, framealpha=0.92)
     fig.tight_layout()
-    out_eq = out_dir / "equity_curves.png"
+    out_eq = out / "equity_curves.png"
     fig.savefig(out_eq, dpi=140, bbox_inches="tight")
     plt.close(fig)
     print(f"  wrote {out_eq}")
@@ -113,7 +110,7 @@ def main():
     calmars = [d["metrics"]["calmar"] for d in data]
     colors = [d["color"] for d in data]
 
-    fig, axes = plt.subplots(1, 2, figsize=(15, 6))
+    fig, axes = plt.subplots(1, 2, figsize=(16, 7))
     y = np.arange(len(names))
     axes[0].barh(y, sharpes, color=colors, edgecolor="black", linewidth=0.5)
     axes[0].set_yticks(y); axes[0].set_yticklabels(names, fontsize=8)
@@ -125,23 +122,23 @@ def main():
     axes[1].barh(y, calmars, color=colors, edgecolor="black", linewidth=0.5)
     axes[1].set_yticks(y); axes[1].set_yticklabels(names, fontsize=8)
     axes[1].invert_yaxis()
-    axes[1].set_title("Calmar ratio")
+    axes[1].set_title("Calmar ratio (CAGR / |MaxDD|)")
     axes[1].grid(True, alpha=0.3, axis="x")
     for i, v in enumerate(calmars):
         axes[1].text(v + 0.01, i, f"{v:.2f}", va="center", fontsize=9)
     fig.tight_layout()
-    out_bar = out_dir / "sharpe_calmar.png"
+    out_bar = out / "sharpe_calmar.png"
     fig.savefig(out_bar, dpi=140, bbox_inches="tight")
     plt.close(fig)
     print(f"  wrote {out_bar}")
 
     # ---- Table ----
     print()
-    print(f"  {'Strategy':<46s}  {'CAGR':>7s}  {'Vol':>7s}  {'Sharpe':>7s}  {'MaxDD':>8s}  {'Calmar':>7s}")
-    print("  " + "-" * 100)
+    print(f"  {'Strategy':<52s}  {'CAGR':>7s}  {'Vol':>7s}  {'Sharpe':>7s}  {'MaxDD':>8s}  {'Calmar':>7s}")
+    print("  " + "-" * 110)
     for d in data:
         m = d["metrics"]
-        print(f"  {d['label']:<46s}  "
+        print(f"  {d['label']:<52s}  "
               f"{m['cagr']*100:6.2f}%  {m['vol']*100:6.2f}%  "
               f"{m['sharpe']:7.2f}  {m['max_dd']*100:7.2f}%  {m['calmar']:7.2f}")
 
