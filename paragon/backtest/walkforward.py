@@ -101,6 +101,15 @@ class WalkForwardConfig:
                                               # reduction with no fancy
                                               # architecture. n=1 -> single
                                               # model (original behavior).
+    mu_signal: str = "rolling_mean"           # When use_model_mu=False, which
+                                              # classical signal feeds the
+                                              # optimizer:
+                                              #   rolling_mean    : 60d sample mean (v7b default)
+                                              #   momentum_12_1   : Jegadeesh-Titman 12mo - 1mo
+                                              #   momentum_blend  : 50/50 mean + 12-1 momentum
+                                              # 12-1 momentum captures the
+                                              # cross-sectional anomaly that
+                                              # rolling mean misses.
 
 
 @dataclass
@@ -196,6 +205,7 @@ def _infer_one(
     horizon: int,
     shrinkage_alpha: float = 1.0,
     use_model_mu: bool = True,
+    mu_signal: str = "rolling_mean",
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Returns (mu, sigma, mask) at `date`.
 
@@ -238,13 +248,28 @@ def _infer_one(
             Sigma_sample[inactive, inactive] = 1.0
         sigma = shrinkage_alpha * Sigma_model + (1.0 - shrinkage_alpha) * Sigma_sample
 
-    # ---- Mu path (model output or rolling sample mean) ----
+    # ---- Mu path (model output or classical signal) ----
     if use_model_mu:
         mu = mu_model
     else:
-        # Rolling sample mean scaled to the forward horizon. Inactive entries
-        # are zeroed (no expected return, no contribution to optimizer).
-        mu = rets_clean.mean(axis=0) * horizon
+        if mu_signal in ("momentum_12_1", "momentum_blend"):
+            # 12-1 momentum (Jegadeesh-Titman 1993): 12-month mean return
+            # minus 1-month mean return. Captures medium-term trend while
+            # removing short-term reversal contamination.
+            start_252 = max(0, pos - 252 + 1)
+            start_21 = max(0, pos - 21 + 1)
+            rets_252 = bundle.returns.iloc[start_252 : pos + 1].values
+            rets_21 = bundle.returns.iloc[start_21 : pos + 1].values
+            mom_252 = np.nan_to_num(rets_252, nan=0.0).mean(axis=0)
+            mom_21 = np.nan_to_num(rets_21, nan=0.0).mean(axis=0)
+            mu_mom = (mom_252 - mom_21) * horizon
+            if mu_signal == "momentum_12_1":
+                mu = mu_mom
+            else:                              # momentum_blend
+                mu_mean = rets_clean.mean(axis=0) * horizon
+                mu = 0.5 * mu_mean + 0.5 * mu_mom
+        else:                                  # rolling_mean (default v7b)
+            mu = rets_clean.mean(axis=0) * horizon
         mu = np.where(mask, mu, 0.0)
     return mu, sigma, mask
 
@@ -425,6 +450,7 @@ def run_walk_forward(
                             horizon=train_cfg.horizon,
                             shrinkage_alpha=cfg.shrinkage_alpha,
                             use_model_mu=cfg.use_model_mu,
+                            mu_signal=cfg.mu_signal,
                         )
                         sig_v = 0.5 * (sig_v + sig_v.T)
                         w_v, _ = optimize_portfolio(mu_v, sig_v, pw, mk_v, trial_cfg)
@@ -457,6 +483,7 @@ def run_walk_forward(
                 models, bundle, d, train_cfg.window, prev_w, device,
                 horizon=train_cfg.horizon, shrinkage_alpha=cfg.shrinkage_alpha,
                 use_model_mu=cfg.use_model_mu,
+                mu_signal=cfg.mu_signal,
             )
             # Symmetrize Sigma defensively (matrix from PyTorch may have tiny asym).
             sigma = 0.5 * (sigma + sigma.T)

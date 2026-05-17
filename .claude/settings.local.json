@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git add *)",
+      "Bash(git commit -m 'v11 + v11b: momentum-based mu signals regressed \\(Sharpe 0.78 + 0.80\\) *)",
+      "Bash(git push *)"
+    ]
+  }
+}

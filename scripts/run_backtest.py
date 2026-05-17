@@ -177,6 +177,7 @@ def main() -> None:
         warm_start_lr_scale=cfg.backtest.get("warm_start_lr_scale", 0.5),
         pretrained_checkpoint=cfg.backtest.get("pretrained_checkpoint", None),
         n_ensemble_seeds=cfg.backtest.get("n_ensemble_seeds", 1),
+        mu_signal=cfg.backtest.get("mu_signal", "rolling_mean"),
     )
 
     def make_model_cfg(F_asset: int, F_ctx: int, N: int) -> TransformerConfig:
