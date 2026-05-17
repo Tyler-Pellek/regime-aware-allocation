@@ -36,7 +36,7 @@ from ..model.cholesky import sigma_from_L
 from ..model.input_builder import build_snapshot, collate_snapshots
 from ..model.transformer import CrossAssetTransformer, TransformerConfig
 from ..optim.baselines import BASELINES
-from ..optim.cvar import CVaRConfig, optimize_cvar
+from ..optim.cvar import CVaRConfig, optimize_cvar, optimize_portfolio
 from ..regime.hmm import HMMConfig, RegimeHMM, make_regime_signal
 from ..training.trainer import TrainConfig, train_model
 from ..utils.logging import get_logger
@@ -53,11 +53,41 @@ class WalkForwardConfig:
     start: str = "2005-01-03"
     end: str = "2020-04-01"
     initial_train_end: str = "2010-12-31"
-    rebal_freq_days: int = 5            # weekly
+    rebal_freq_days: int = 5            # weekly rebalance at inference
+    train_freq_days: int | None = None  # stride for TRAINING snapshots.
+                                        # None -> use rebal_freq_days (i.e.
+                                        # weekly training). Setting this to
+                                        # 1 (daily) gives the model 5x more
+                                        # supervision per fold.
     fold_test_days: int = 252            # ~1 year per test fold before retrain
     train_lookback_days: int | None = None   # None = expanding window
     transaction_cost_bps: float = 2.0   # one-way, applied to L1 turnover
     prev_w_in_features: bool = True
+    shrinkage_alpha: float = 1.0        # 1.0 = pure model Sigma, 0.0 = pure
+                                        # rolling sample cov. Ledoit-Wolf-style
+                                        # convex blend at inference time:
+                                        #   Sigma_final = alpha*Sigma_model
+                                        #                + (1-alpha)*Sigma_sample
+                                        # Use 0.5-0.7 for a robust blend.
+    use_model_mu: bool = True           # if False, the model's mu predictions
+                                        # are ignored and the optimizer is fed
+                                        # the rolling sample mean of returns
+                                        # over the trailing window (scaled to
+                                        # the forward horizon). Cleaner
+                                        # division of labor: the model
+                                        # contributes the regime-aware Sigma
+                                        # (what it's actually good at) and
+                                        # classical statistics contribute the
+                                        # mean (where the model adds noise).
+    warm_start: bool = False            # if True, each fold's model is
+                                        # initialized from the previous fold's
+                                        # state_dict instead of from scratch.
+                                        # Per memo §6, this preserves the
+                                        # network's memory of historical
+                                        # market crashes across retrainings.
+    warm_start_lr_scale: float = 0.5    # multiplier applied to the base lr
+                                        # when warm-starting (fine-tuning
+                                        # naturally wants a lower LR).
 
 
 @dataclass
@@ -150,16 +180,51 @@ def _infer_one(
     window: int,
     prev_w: np.ndarray,
     device: torch.device,
+    horizon: int,
+    shrinkage_alpha: float = 1.0,
+    use_model_mu: bool = True,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Returns (mu, sigma, mask) at `date`."""
+    """Returns (mu, sigma, mask) at `date`.
+
+    When `shrinkage_alpha < 1.0`, the predicted Sigma is convex-blended with
+    the rolling sample covariance:
+        Sigma_final = alpha * Sigma_model + (1 - alpha) * Sigma_sample
+    where Sigma_sample is computed from the trailing `window` log returns and
+    scaled to the forward `horizon`. This is the Ledoit-Wolf-style robustness
+    fix: if the model's prediction is unreliable in a regime it hasn't seen,
+    the sample-cov term keeps the optimizer's inputs sensible.
+    """
     snap = build_snapshot(bundle, date, window=window, prev_w=prev_w)
     batch = collate_snapshots([snap])
     batch = {k: v.to(device) for k, v in batch.items()}
     out = model(batch["asset_feats"], batch["ctx_feats"], batch["mask"])
-    Sigma = sigma_from_L(out["L"], batch["mask"])
-    mu = out["mu"][0].cpu().numpy().astype(np.float64)
-    sigma = Sigma[0].cpu().numpy().astype(np.float64)
+    Sigma_model = sigma_from_L(out["L"], batch["mask"])[0].cpu().numpy().astype(np.float64)
+    mu_model = out["mu"][0].cpu().numpy().astype(np.float64)
     mask = snap.mask
+
+    # ---- Sigma path (model or shrunk-to-sample) ----
+    pos = bundle.dates.get_loc(date)
+    rets_window = bundle.returns.iloc[pos - window + 1 : pos + 1].values
+    rets_clean = np.nan_to_num(rets_window, nan=0.0)
+    inactive = ~mask
+    if shrinkage_alpha >= 1.0 - 1e-9:
+        sigma = Sigma_model
+    else:
+        Sigma_sample = np.cov(rets_clean.T, ddof=0) * horizon
+        if inactive.any():
+            Sigma_sample[inactive, :] = 0.0
+            Sigma_sample[:, inactive] = 0.0
+            Sigma_sample[inactive, inactive] = 1.0
+        sigma = shrinkage_alpha * Sigma_model + (1.0 - shrinkage_alpha) * Sigma_sample
+
+    # ---- Mu path (model output or rolling sample mean) ----
+    if use_model_mu:
+        mu = mu_model
+    else:
+        # Rolling sample mean scaled to the forward horizon. Inactive entries
+        # are zeroed (no expected return, no contribution to optimizer).
+        mu = rets_clean.mean(axis=0) * horizon
+        mu = np.where(mask, mu, 0.0)
     return mu, sigma, mask
 
 
@@ -224,6 +289,7 @@ def run_walk_forward(
     N = p.shape[1]
     prev_w = np.zeros(N)
     device = None  # set after first model train
+    warm_state: dict | None = None   # carries previous fold's model weights
 
     for fold_idx, (train_end, test_end) in enumerate(folds):
         LOG.info("\n=== Fold %d : train<=%s, test<=%s ===", fold_idx, train_end.date(), test_end.date())
@@ -239,8 +305,12 @@ def run_walk_forward(
         bundle = assemble_bundle(p, m, probs, um, window=train_cfg.window)
 
         # ----- 3. Build training snapshot decision dates (only past) -----
+        # The training stride decouples from the rebalance stride — we can
+        # train on daily snapshots (lots of supervision) while still
+        # rebalancing weekly (low turnover).
+        train_stride = cfg.train_freq_days if cfg.train_freq_days is not None else cfg.rebal_freq_days
         train_dates = _train_decision_dates(
-            p.index, train_end, cfg.rebal_freq_days, train_cfg.window, cfg.train_lookback_days,
+            p.index, train_end, train_stride, train_cfg.window, cfg.train_lookback_days,
         )
         # Need horizon room too.
         n = len(p.index)
@@ -262,7 +332,11 @@ def run_walk_forward(
             model_cfg=model_cfg,
             train_cfg=train_cfg,
             save_path=(artifacts_dir / f"model_fold{fold_idx}.pt") if artifacts_dir else None,
+            warm_start_state=warm_state if cfg.warm_start else None,
+            warm_start_lr_scale=cfg.warm_start_lr_scale,
         )
+        if cfg.warm_start:
+            warm_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
         from ..training.trainer import select_device
         device = select_device(train_cfg.device)
         model.eval()
@@ -275,10 +349,14 @@ def run_walk_forward(
         test_dates = pd.DatetimeIndex([d for d in test_dates if d != p.index[-1]])
 
         for i, d in enumerate(test_dates):
-            mu, sigma, mask = _infer_one(model, bundle, d, train_cfg.window, prev_w, device)
+            mu, sigma, mask = _infer_one(
+                model, bundle, d, train_cfg.window, prev_w, device,
+                horizon=train_cfg.horizon, shrinkage_alpha=cfg.shrinkage_alpha,
+                use_model_mu=cfg.use_model_mu,
+            )
             # Symmetrize Sigma defensively (matrix from PyTorch may have tiny asym).
             sigma = 0.5 * (sigma + sigma.T)
-            new_w, info = optimize_cvar(mu, sigma, prev_w, mask, cvar_cfg)
+            new_w, info = optimize_portfolio(mu, sigma, prev_w, mask, cvar_cfg)
             # Realized window: from d (exclusive) to next decision date (inclusive).
             d_next = test_dates[i + 1] if i + 1 < len(test_dates) else min(test_end, p.index[-1])
             ret_seg = _realized_returns(p, d, d_next, new_w)

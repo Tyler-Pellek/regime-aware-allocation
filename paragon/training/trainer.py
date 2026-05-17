@@ -11,7 +11,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from ..features import FeatureBundle
-from ..model.cholesky import gaussian_nll
+from ..model.cholesky import gaussian_nll, sigma_anchor_loss
 from ..model.transformer import CrossAssetTransformer, TransformerConfig
 from ..utils.logging import get_logger
 from .dataset import SnapshotDataset, collate
@@ -31,6 +31,9 @@ class TrainConfig:
     val_fraction: float = 0.15
     early_stop_patience: int = 6
     device: str = "cuda"         # "cuda" / "mps" / "cpu" — auto-fallback in code
+    anchor_lambda: float = 0.0   # weight on the Sigma-anchor auxiliary loss
+                                 # (0 = pure NLL, 1.0+ = strong shrinkage to
+                                 # rolling sample covariance). 0.1-0.5 typical.
 
 
 def select_device(preferred: str) -> torch.device:
@@ -54,13 +57,21 @@ def train_model(
     model_cfg: TransformerConfig,
     train_cfg: TrainConfig,
     save_path: str | Path | None = None,
+    warm_start_state: dict | None = None,
+    warm_start_lr_scale: float = 0.5,
 ) -> tuple[CrossAssetTransformer, dict]:
     """Train a CrossAssetTransformer on snapshots from `decision_dates`.
+
+    If `warm_start_state` is provided (a state_dict from a previous fold's
+    model), the new model is initialized with those weights instead of from
+    scratch, and the learning rate is scaled by `warm_start_lr_scale` (default
+    0.5x) — this is fine-tuning, not initial training. Per memo §6 this
+    "preserves the network's deep memory of historical market crashes".
 
     Returns the trained model and a history dict (per-epoch losses).
     """
     device = select_device(train_cfg.device)
-    LOG.info("Training on device: %s", device)
+    LOG.info("Training on device: %s%s", device, " (WARM START)" if warm_start_state else "")
 
     train_dates, val_dates = split_train_val(decision_dates, train_cfg.val_fraction)
     LOG.info("Train snapshots: %d   Val snapshots: %d", len(train_dates), len(val_dates))
@@ -80,29 +91,56 @@ def train_model(
     ) if len(val_ds) > 0 else None
 
     model = CrossAssetTransformer(model_cfg).to(device)
-    opt = torch.optim.AdamW(model.parameters(), lr=train_cfg.lr, weight_decay=train_cfg.weight_decay)
+    if warm_start_state is not None:
+        # Tolerate small parameter shape mismatches (e.g. universe N changed) by
+        # loading what matches and warning about the rest.
+        own_state = model.state_dict()
+        loadable = {k: v for k, v in warm_start_state.items()
+                    if k in own_state and own_state[k].shape == v.shape}
+        missing = [k for k in warm_start_state.keys() if k not in loadable]
+        if missing:
+            LOG.warning("Warm-start: skipping %d/%d params due to shape mismatch (e.g. %s)",
+                        len(missing), len(warm_start_state), missing[:3])
+        own_state.update(loadable)
+        model.load_state_dict(own_state)
+    effective_lr = train_cfg.lr * (warm_start_lr_scale if warm_start_state is not None else 1.0)
+    opt = torch.optim.AdamW(model.parameters(), lr=effective_lr, weight_decay=train_cfg.weight_decay)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=train_cfg.epochs)
 
-    history = {"train_loss": [], "val_loss": []}
+    history = {"train_loss": [], "val_loss": [], "train_nll": [], "train_anchor": []}
     best_val = float("inf")
     best_state = None
     bad_epochs = 0
+    use_anchor = train_cfg.anchor_lambda > 0
 
     for epoch in range(1, train_cfg.epochs + 1):
         model.train()
-        total, n_batches = 0.0, 0
+        total, total_nll, total_anchor, n_batches = 0.0, 0.0, 0.0, 0
         for batch in train_loader:
             batch = {k: v.to(device) for k, v in batch.items()}
             out = model(batch["asset_feats"], batch["ctx_feats"], batch["mask"])
-            loss = gaussian_nll(out["mu"], out["L"], batch["target"], batch["target_mask"])
+            nll = gaussian_nll(out["mu"], out["L"], batch["target"], batch["target_mask"])
+            if use_anchor:
+                aux = sigma_anchor_loss(
+                    out["L"], batch["sigma_baseline"], batch["mask"]
+                )
+                loss = nll + train_cfg.anchor_lambda * aux
+                total_anchor += float(aux.item())
+            else:
+                loss = nll
             opt.zero_grad(set_to_none=True)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), train_cfg.grad_clip)
             opt.step()
             total += float(loss.item())
+            total_nll += float(nll.item())
             n_batches += 1
         train_loss = total / max(n_batches, 1)
+        train_nll_val = total_nll / max(n_batches, 1)
+        train_anchor_val = total_anchor / max(n_batches, 1)
         history["train_loss"].append(train_loss)
+        history["train_nll"].append(train_nll_val)
+        history["train_anchor"].append(train_anchor_val)
 
         if val_loader is not None:
             model.eval()
@@ -111,8 +149,15 @@ def train_model(
                 for batch in val_loader:
                     batch = {k: v.to(device) for k, v in batch.items()}
                     out = model(batch["asset_feats"], batch["ctx_feats"], batch["mask"])
-                    loss = gaussian_nll(out["mu"], out["L"], batch["target"], batch["target_mask"])
-                    vtotal += float(loss.item())
+                    vnll = gaussian_nll(out["mu"], out["L"], batch["target"], batch["target_mask"])
+                    if use_anchor:
+                        vaux = sigma_anchor_loss(
+                            out["L"], batch["sigma_baseline"], batch["mask"]
+                        )
+                        vloss = vnll + train_cfg.anchor_lambda * vaux
+                    else:
+                        vloss = vnll
+                    vtotal += float(vloss.item())
                     vn += 1
             val_loss = vtotal / max(vn, 1)
         else:
@@ -120,10 +165,16 @@ def train_model(
         history["val_loss"].append(val_loss)
 
         sched.step()
-        LOG.info(
-            "epoch %02d   train_nll=%.5f   val_nll=%.5f   lr=%.2e",
-            epoch, train_loss, val_loss, opt.param_groups[0]["lr"],
-        )
+        if use_anchor:
+            LOG.info(
+                "epoch %02d   train_nll=%.4f anchor=%.4f   val_loss=%.4f   lr=%.2e",
+                epoch, train_nll_val, train_anchor_val, val_loss, opt.param_groups[0]["lr"],
+            )
+        else:
+            LOG.info(
+                "epoch %02d   train_nll=%.5f   val_nll=%.5f   lr=%.2e",
+                epoch, train_loss, val_loss, opt.param_groups[0]["lr"],
+            )
         # Early stop on val
         if val_loss + 1e-6 < best_val:
             best_val = val_loss

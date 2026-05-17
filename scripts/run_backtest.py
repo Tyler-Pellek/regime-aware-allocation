@@ -83,15 +83,21 @@ def main() -> None:
         val_fraction=cfg.training.val_fraction,
         early_stop_patience=cfg.training.early_stop_patience,
         device=cfg.training.device,
+        anchor_lambda=cfg.training.get("anchor_lambda", 0.0),
     )
     cvar_cfg = CVaRConfig(
+        mode=cfg.cvar.get("mode", "cvar"),
         alpha=cfg.cvar.alpha,
+        risk_aversion=cfg.cvar.get("risk_aversion", 20.0),
+        demean_mu=cfg.cvar.get("demean_mu", False),
         turnover_lambda=cfg.cvar.turnover_lambda,
         long_only=cfg.cvar.long_only,
         w_min=cfg.cvar.w_min,
         w_max=cfg.cvar.w_max,
         gross_max=cfg.cvar.gross_max,
         cash_allowed=cfg.cvar.cash_allowed,
+        min_invested=cfg.cvar.get("min_invested", 0.0),
+        vol_cap_weekly=cfg.cvar.get("vol_cap_weekly", None),
         solver=cfg.cvar.solver,
     )
     hmm_cfg = HMMConfig(
@@ -104,9 +110,14 @@ def main() -> None:
         end=cfg.backtest.end,
         initial_train_end=cfg.backtest.initial_train_end,
         rebal_freq_days=cfg.backtest.rebal_freq_days,
+        train_freq_days=cfg.backtest.get("train_freq_days", None),
         fold_test_days=cfg.backtest.fold_test_days,
         train_lookback_days=cfg.backtest.train_lookback_days,
         transaction_cost_bps=cfg.backtest.transaction_cost_bps,
+        shrinkage_alpha=cfg.backtest.get("shrinkage_alpha", 1.0),
+        use_model_mu=cfg.backtest.get("use_model_mu", True),
+        warm_start=cfg.backtest.get("warm_start", False),
+        warm_start_lr_scale=cfg.backtest.get("warm_start_lr_scale", 0.5),
     )
 
     def make_model_cfg(F_asset: int, F_ctx: int, N: int) -> TransformerConfig:
@@ -120,6 +131,8 @@ def main() -> None:
             ff_mult=cfg.model.ff_mult,
             dropout=cfg.model.dropout,
             chol_min_diag=cfg.model.chol_min_diag,
+            head_type=cfg.model.get("head_type", "standard"),
+            n_factors=cfg.model.get("n_factors", 4),
         )
 
     # ---------- 3. Walk-forward run ----------

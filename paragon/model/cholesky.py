@@ -90,3 +90,33 @@ def gaussian_nll(
     if not losses:
         return torch.zeros((), device=mu.device, dtype=mu.dtype, requires_grad=True)
     return torch.stack(losses).mean()
+
+
+def sigma_anchor_loss(
+    L: Tensor, sigma_baseline: Tensor, mask: Tensor, eps: float = 1e-6
+) -> Tensor:
+    """Soft anchor that pulls per-asset diag(Sigma) toward the rolling
+    sample-covariance diagonal — i.e., matches per-asset volatilities in
+    LOG space, which is naturally scale-invariant:
+
+        L_aux = mean_over_active_i [ (log Sigma_pred[i,i] - log Sigma_base[i,i])^2 ]
+
+    Log-space comparison means a factor-of-2 vol mismatch contributes ~0.48
+    regardless of whether vols are 0.01 or 100. With the model initialized
+    to predict diag ~ 0.02 (via the softplus shift in CholeskyHead) and
+    baseline weekly vols ~ 0.014, initial loss is ~0.5 and decays toward 0.
+    With anchor_lambda ~ 1.0, naturally balances against NLL.
+
+    Only the DIAGONAL (per-asset variance) is anchored — off-diagonals
+    (correlations) remain fully free for the model to learn. This is the
+    right inductive bias: empirical correlations are too noisy to anchor,
+    but empirical per-asset vols are reliable.
+    """
+    Sigma_pred = L @ L.transpose(-1, -2)
+    diag_pred = torch.diagonal(Sigma_pred, dim1=-2, dim2=-1)            # (B, N)
+    diag_base = torch.diagonal(sigma_baseline, dim1=-2, dim2=-1)        # (B, N)
+    log_pred = torch.log(torch.clamp(diag_pred, min=eps))
+    log_base = torch.log(torch.clamp(diag_base, min=eps))
+    diff_sq = (log_pred - log_base) ** 2
+    m = mask.float()
+    return (diff_sq * m).sum() / (m.sum() + eps)

@@ -1,4 +1,50 @@
-# Paragon default config — mega-cap tech, 2005-2020, weekly rebalance.
+# Paragon v5 — 38-asset universe + drop model mu + dense training.
+#
+# Lineage:
+#   v1 (16 tech, min-CVaR, loose)        : CAGR 16.4% / Vol 24.3% / Sharpe 0.75 / DD -56%
+#   v2 (16 tech, min-CVaR + risk caps)   : CAGR  7.5% / Vol 12.3% / Sharpe 0.65 / DD -34%
+#   v3 (24 multi-asset, min-CVaR)        : CAGR  1.6% / Vol  4.2% / Sharpe 0.41 / DD -14%
+#                                          [min-CVaR parks in bonds; degenerate]
+#   v4 (24 multi-asset, mean-variance)   : CAGR  4.3% / Vol  5.9% / Sharpe 0.75 / DD -14%
+#                                          [model mu poisoning; hit rate 26%]
+#   v5 (38 multi-asset+, MV, no model mu)  : TBD
+#
+# v5 thesis (developed from the v4 honest negative result):
+#   - The memo's architectural claim is specifically about *covariance during
+#     stress* — not return prediction. The model has been over-asked to do
+#     both. v5 commits hard to "model = Sigma, classical = mu".
+#   - At 24 assets, the universe was still dominated by a few highly-correlated
+#     equity clusters. v5 adds the full GICS sector wheel (9 SPDR sector ETFs)
+#     and 4 factor ETFs (USMV/MTUM/QUAL/VLUE) so the model has cross-sector
+#     and cross-factor correlations to actually time.
+#   - The model has been training on only ~200 snapshots per fold (weekly
+#     stride). v5 trains on every other day (~500 snapshots/fold) — 2.5x more
+#     supervision, where the architecture has room to learn.
+#
+# v5 changes vs v4:
+#   universe                  24 multi-asset  -> 38 multi-asset+ (added 9 sector
+#                                                ETFs + 4 factor ETFs)
+#   backtest.train_freq_days  (new = rebal)   -> 2  (train every other day)
+#   backtest.use_model_mu     (default true)  -> false  (use rolling sample
+#                                                mean; model contributes Sigma
+#                                                only)
+#   cvar.demean_mu            true            -> false  (n/a now that we use
+#                                                sample mean which is naturally
+#                                                signed)
+#   backtest.shrinkage_alpha  0.6             -> 0.7  (give the model more
+#                                                weight on Sigma since the
+#                                                bigger universe has more
+#                                                cross-asset correlations the
+#                                                model is uniquely positioned
+#                                                to capture)
+#   cvar.w_max                0.20            -> 0.15  (forces ~7+ name spread,
+#                                                appropriate for 38 assets)
+#
+# The right success metric for v5 is NOT just CAGR — it's risk-adjusted
+# return with tail protection. We expect:
+#   - Strategy Sharpe within 0.1 of sample_cov_mv baseline
+#   - Strategy MaxDD < sample_cov_mv MaxDD (model Sigma catches stress earlier)
+#   - Both beat equal_weight on Sharpe
 
 seed: 42
 artifacts_dir: artifacts/reports/default
@@ -6,13 +52,57 @@ artifacts_dir: artifacts/reports/default
 data:
   kaggle_root: data/raw/kaggle_stock_market
   macro_cache: data/cache/macro.parquet
-  start: "2003-01-01"     # extra warmup before the backtest start
+  start: "2003-01-01"
   end:   "2020-04-01"
 
 universe:
-  # Override TECH_UNIVERSE here if desired; null = use the canonical list.
-  tickers: null
-  min_history: 60         # bars required before an asset enters attention
+  tickers:
+    # Mega tech (8)
+    - AAPL
+    - MSFT
+    - GOOGL
+    - AMZN
+    - NVDA
+    - ORCL
+    - CSCO
+    - INTC
+    # Mega diverse (5)
+    - JPM
+    - JNJ
+    - XOM
+    - PG
+    - WMT
+    # Sector ETFs (9) — full GICS wheel
+    - XLU
+    - XLP
+    - XLV
+    - XLE
+    - XLF
+    - XLK
+    - XLY
+    - XLI
+    - XLB
+    # Factor ETFs (4) — style premia
+    - USMV
+    - MTUM
+    - QUAL
+    - VLUE
+    # Broad equity (4)
+    - QQQ
+    - IWM
+    - EFA
+    - EEM
+    # Bonds (5)
+    - TLT
+    - IEF
+    - LQD
+    - HYG
+    - SHY
+    # Real (3)
+    - GLD
+    - USO
+    - VNQ
+  min_history: 60
 
 regime:
   n_states: 3
@@ -20,47 +110,52 @@ regime:
   n_iter: 200
 
 model:
-  d_model: 128
+  d_model: 192
   n_heads: 8
-  n_layers: 4
+  n_layers: 5
   ff_mult: 4
-  dropout: 0.1
-  chol_min_diag: 0.0001
+  dropout: 0.15
+  chol_min_diag: 0.01
 
 training:
-  window: 60              # W trailing days
-  horizon: 5              # weekly forward target
+  window: 60
+  horizon: 5
   batch_size: 32
   epochs: 30
   lr: 0.0003
-  weight_decay: 0.0001
+  weight_decay: 0.0005
   grad_clip: 1.0
   val_fraction: 0.15
-  early_stop_patience: 6
-  device: "cuda"          # "cuda" | "mps" | "cpu" — auto-fallback
+  early_stop_patience: 5
+  device: "cpu"
+  anchor_lambda: 0.0
 
 cvar:
+  mode: "mv"
+  risk_aversion: 25.0
+  demean_mu: false        # use raw rolling sample mean
   alpha: 0.95
-  turnover_lambda: 0.0005
+  turnover_lambda: 0.005
   long_only: true
   w_min: 0.0
-  w_max: 0.30
+  w_max: 0.15
   gross_max: 1.0
-  cash_allowed: false     # sum(w) == 1; required for the optimizer to actually
-                          # allocate. With cash_allowed=true the min-CVaR
-                          # objective trivially picks w=0 unless mu predictions
-                          # dominate the tail penalty (validated empirically in
-                          # the midsize local run: see artifacts/reports/midsize).
+  cash_allowed: false
+  min_invested: 0.0
+  vol_cap_weekly: 0.04
   solver: "CLARABEL"
 
 backtest:
   start: "2005-01-03"
   end:   "2020-04-01"
-  initial_train_end: "2010-12-31"
-  rebal_freq_days: 5
+  initial_train_end: "2007-12-31"
+  rebal_freq_days: 5       # weekly rebalance (low turnover)
+  train_freq_days: 2       # train every other day (2.5x more snapshots)
   fold_test_days: 252
-  train_lookback_days: null   # null = expanding window
+  train_lookback_days: null
   transaction_cost_bps: 2.0
+  shrinkage_alpha: 0.7
+  use_model_mu: false      # use rolling sample mean for mu instead
   baselines:
     - equal_weight
     - inverse_vol

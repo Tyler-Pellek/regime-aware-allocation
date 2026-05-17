@@ -22,6 +22,8 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor, nn
 
+from .factor_head import FactorCholeskyHead
+
 
 # --------------------------------------------------------------------------- #
 # Config
@@ -38,6 +40,12 @@ class TransformerConfig:
     ff_mult: int = 4
     dropout: float = 0.1
     chol_min_diag: float = 1e-4    # enforced floor on diag of L (post softplus)
+    head_type: str = "standard"    # "standard" (full lower-tri L) or "factor"
+                                   # (Sigma = B F B^T + D, rank-k + diag).
+                                   # Factor head has 3-4x fewer free params and
+                                   # is well-suited to data-scarce regimes
+                                   # where N is large relative to training set.
+    n_factors: int = 4             # only used when head_type='factor'
 
 
 # --------------------------------------------------------------------------- #
@@ -121,7 +129,6 @@ class CholeskyHead(nn.Module):
         """asset_emb: (B, N, d) -> L: (B, N, N) lower-triangular."""
         raw = self.head(asset_emb)                  # (B, N, N)
         L = raw * self.tril_mask                    # zero above diagonal
-        # Enforce strictly positive diagonal: replace diag(L) with softplus(diag) + floor.
         diag = torch.diagonal(L, dim1=-2, dim2=-1)
         diag_pos = torch.nn.functional.softplus(diag) + self.min_diag
         L = L - torch.diag_embed(diag) + torch.diag_embed(diag_pos)
@@ -157,7 +164,13 @@ class CrossAssetTransformer(nn.Module):
             for _ in range(cfg.n_layers)
         ])
         self.final_ln = nn.LayerNorm(cfg.d_model)
-        self.chol_head = CholeskyHead(cfg.n_assets, cfg.d_model, cfg.chol_min_diag)
+        if cfg.head_type == "factor":
+            self.chol_head = FactorCholeskyHead(
+                cfg.n_assets, cfg.d_model, n_factors=cfg.n_factors,
+                min_diag=cfg.chol_min_diag,
+            )
+        else:
+            self.chol_head = CholeskyHead(cfg.n_assets, cfg.d_model, cfg.chol_min_diag)
         self.mean_head = MeanHead(cfg.d_model)
 
     def forward(
@@ -182,7 +195,11 @@ class CrossAssetTransformer(nn.Module):
         for blk in self.blocks:
             seq = blk(seq, key_padding_mask=kpm)
         seq = self.final_ln(seq)
+        ctx_emb = seq[:, 0, :]                                     # (B, d)
         asset_emb = seq[:, 1:, :]                                  # (B, N, d)
-        L = self.chol_head(asset_emb)                              # (B, N, N)
+        if self.cfg.head_type == "factor":
+            L = self.chol_head(asset_emb, ctx_emb)                 # (B, N, N)
+        else:
+            L = self.chol_head(asset_emb)                          # (B, N, N)
         mu = self.mean_head(asset_emb)                             # (B, N)
         return {"L": L, "mu": mu}

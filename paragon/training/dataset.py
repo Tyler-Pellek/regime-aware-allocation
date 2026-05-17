@@ -39,6 +39,8 @@ class TrainSample:
     snapshot: Snapshot
     target: np.ndarray            # (N,) forward h-day cumulative log return
     target_mask: np.ndarray       # (N,) bool — asset is active at both t and t+h
+    sigma_baseline: np.ndarray    # (N, N) rolling sample covariance, h-scaled.
+                                  # Used as a soft prior the model is anchored to.
 
 
 class SnapshotDataset(Dataset):
@@ -87,7 +89,22 @@ class SnapshotDataset(Dataset):
         fwd_filled = np.nan_to_num(fwd, nan=0.0)
         target = fwd_filled.sum(axis=0).astype(np.float32)        # (N,)
         target_mask = snap.mask & survives
-        return TrainSample(snap, target, target_mask)
+
+        # Rolling-window sample covariance, scaled to the forward horizon.
+        # Inactive (NaN) asset rows and cols become identity entries so the
+        # matrix stays PSD and the aux loss correctly ignores them via the
+        # mask at training time.
+        rets_window = self.bundle.returns.iloc[pos - self.window + 1 : pos + 1].values
+        rets_clean = np.nan_to_num(rets_window, nan=0.0)
+        sigma_baseline = (np.cov(rets_clean.T, ddof=0) * self.horizon).astype(np.float32)
+        # Replace inactive-asset rows/cols with identity to avoid pulling the
+        # predicted Sigma toward zero on assets the model is masking out.
+        inactive = ~snap.mask
+        if inactive.any():
+            sigma_baseline[inactive, :] = 0.0
+            sigma_baseline[:, inactive] = 0.0
+            sigma_baseline[inactive, inactive] = 1.0
+        return TrainSample(snap, target, target_mask, sigma_baseline)
 
 
 def collate(batch: list[TrainSample]) -> dict[str, torch.Tensor]:
@@ -95,4 +112,7 @@ def collate(batch: list[TrainSample]) -> dict[str, torch.Tensor]:
     out = collate_snapshots(snaps)
     out["target"] = torch.from_numpy(np.stack([b.target for b in batch], axis=0))
     out["target_mask"] = torch.from_numpy(np.stack([b.target_mask for b in batch], axis=0))
+    out["sigma_baseline"] = torch.from_numpy(
+        np.stack([b.sigma_baseline for b in batch], axis=0)
+    )
     return out

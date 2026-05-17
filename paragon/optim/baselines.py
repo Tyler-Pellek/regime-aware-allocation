@@ -11,7 +11,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from .cvar import CVaRConfig, optimize_cvar
+from .cvar import CVaRConfig, optimize_cvar, optimize_portfolio
 
 
 # --------------------------------------------------------------------------- #
@@ -86,7 +86,7 @@ def sample_cov_cvar(
     bad_sig = ~np.isfinite(sig)
     sig[bad_sig] = 0.0
     sig = 0.5 * (sig + sig.T) + 1e-6 * np.eye(N)
-    w_full, _ = optimize_cvar(mu, sig, prev_w, mask, cfg)
+    w_full, _ = optimize_portfolio(mu, sig, prev_w, mask, cfg)
     return w_full
 
 
