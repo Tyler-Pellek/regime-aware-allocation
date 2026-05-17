@@ -264,6 +264,8 @@ def run_walk_forward(
     cvar_cfg: CVaRConfig,
     hmm_cfg: HMMConfig | None = None,
     artifacts_dir: str | Path | None = None,
+    ohlcv_dict: dict | None = None,        # optional: per-asset OHLCV frames
+                                           # for v7+ OHLCV features
 ) -> BacktestArtifacts:
     hmm_cfg = hmm_cfg or HMMConfig()
     artifacts_dir = Path(artifacts_dir) if artifacts_dir else None
@@ -302,7 +304,9 @@ def run_walk_forward(
             regime_probs_full.update(probs)
 
         # ----- 2. Build feature bundle (using current regime probs) -----
-        bundle = assemble_bundle(p, m, probs, um, window=train_cfg.window)
+        bundle = assemble_bundle(
+            p, m, probs, um, window=train_cfg.window, ohlcv_dict=ohlcv_dict,
+        )
 
         # ----- 3. Build training snapshot decision dates (only past) -----
         # The training stride decouples from the rebalance stride — we can
@@ -322,8 +326,9 @@ def run_walk_forward(
             continue
 
         # ----- 4. Build/train model -----
-        # Asset token raw feature dim: W trailing log returns + 1 vol + 1 prev_w.
-        F_asset = train_cfg.window + 2
+        # Asset token raw feature dim: W trailing log returns + 1 vol + 1 prev_w
+        # + F_ohlcv (when bundle has OHLCV features).
+        F_asset = train_cfg.window + 2 + bundle.n_ohlcv_feats
         F_ctx = bundle.regime_probs.shape[1] + bundle.macro_feats.shape[1]
         model_cfg = model_cfg_factory(F_asset, F_ctx, N)
         model, _hist = train_model(

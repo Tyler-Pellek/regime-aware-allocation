@@ -66,6 +66,7 @@ def build_snapshot(
     #   - W trailing log returns (NaN -> 0)
     #   - 1 rolling-vol scalar (NaN -> mean of valid vols, fallback 0.01)
     #   - 1 prev_w scalar
+    #   - F_ohlcv per-asset OHLCV features at date t (if bundle has them)
     rets_filled = np.nan_to_num(rets, nan=0.0)         # (W, N)
     rets_T = rets_filled.T                              # (N, W)
 
@@ -73,9 +74,13 @@ def build_snapshot(
     fallback_vol = float(valid_vol.mean()) if valid_vol.size > 0 else 0.01
     vol_filled = np.where(np.isnan(vol_at_t), fallback_vol, vol_at_t)
 
-    asset_feats = np.concatenate(
-        [rets_T, vol_filled[:, None], prev_w[:, None]], axis=1
-    )  # (N, W + 2)
+    extra_blocks = [rets_T, vol_filled[:, None], prev_w[:, None]]
+    if bundle.ohlcv_feats is not None:
+        ohlcv_row = bundle.ohlcv_feats[pos]            # (N, F_ohlcv)
+        # NaN guard (build_ohlcv_features already handles, defensive here)
+        ohlcv_row = np.nan_to_num(ohlcv_row, nan=0.0, posinf=0.0, neginf=0.0)
+        extra_blocks.append(ohlcv_row.astype(np.float32))
+    asset_feats = np.concatenate(extra_blocks, axis=1)  # (N, W + 2 + F_ohlcv)
 
     # ----- context features -----
     macro_row = bundle.macro_feats.iloc[pos].values

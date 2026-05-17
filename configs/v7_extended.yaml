@@ -1,0 +1,106 @@
+# v7 extended — same as v7_apples_to_apples but the backtest runs through 2024.
+# This is the "real-world" test: more crisis periods OOS (2022 bear, banking
+# crisis, rate hikes) that the v6 setup couldn't see because Kaggle ended
+# April 2020.
+#
+# Splices yfinance OHLCV onto the Kaggle data at the 2020-04-01 cutoff using
+# a ratio anchor so the price series stays continuous across the boundary.
+
+seed: 42
+artifacts_dir: artifacts/reports/v7_extended
+
+features:
+  include_ohlcv: true
+  extended_macro: true
+
+data:
+  kaggle_root: data/raw/kaggle_stock_market
+  macro_cache: data/cache/macro_extended.parquet
+  yfinance_cache: data/cache/yfinance_extension.parquet
+  start: "2003-01-01"
+  end:   "2024-12-31"            # 4.5 extra years of crisis data
+  extend_via_yfinance: true
+
+universe:
+  tickers:
+    - AAPL
+    - MSFT
+    - GOOGL
+    - AMZN
+    - FB
+    - NFLX
+    - NVDA
+    - TSLA
+    - ADBE
+    - CRM
+    - ORCL
+    - INTC
+    - CSCO
+    - QCOM
+    - IBM
+    - TXN
+  min_history: 60
+
+regime:
+  n_states: 3
+  covariance_type: full
+  n_iter: 200
+
+model:
+  d_model: 192
+  n_heads: 8
+  n_layers: 5
+  ff_mult: 4
+  dropout: 0.15
+  chol_min_diag: 0.01
+  head_type: factor
+  n_factors: 4
+
+training:
+  window: 60
+  horizon: 5
+  batch_size: 32
+  epochs: 30
+  lr: 0.0003
+  weight_decay: 0.0005
+  grad_clip: 1.0
+  val_fraction: 0.15
+  early_stop_patience: 6
+  device: cpu
+  anchor_lambda: 0.0
+
+cvar:
+  mode: mv
+  risk_aversion: 25.0
+  demean_mu: false
+  alpha: 0.95
+  turnover_lambda: 0.005
+  long_only: true
+  w_min: 0.0
+  w_max: 0.20
+  gross_max: 1.0
+  cash_allowed: false
+  min_invested: 0.0
+  vol_cap_weekly: 0.04
+  solver: CLARABEL
+
+backtest:
+  start: "2005-01-03"
+  end:   "2024-12-31"
+  initial_train_end: "2007-12-31"
+  rebal_freq_days: 5
+  train_freq_days: 5
+  fold_test_days: 252
+  train_lookback_days: null
+  transaction_cost_bps: 2.0
+  shrinkage_alpha: 0.7
+  use_model_mu: false
+  warm_start: true
+  warm_start_lr_scale: 0.5
+  baselines:
+    - equal_weight
+    - inverse_vol
+    - min_variance
+    - max_sharpe
+    - risk_parity
+    - sample_cov_cvar

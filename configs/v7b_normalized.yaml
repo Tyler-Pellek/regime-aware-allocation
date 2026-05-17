@@ -1,0 +1,110 @@
+# v7 apples-to-apples — same period as v6_03 (2008-2020), with v7 features added.
+# This is the controlled test: only thing changing vs v6_03 is the feature set.
+#
+# v7 feature additions:
+#   - OHLCV-derived per-asset features (4 new per asset):
+#       hl_range_5d, intraday_ret_5d, gap_ret_5d, vol_z
+#   - Yield-curve macro features (4 new):
+#       term_spread_10y_3m, term_spread_10y_3m_chg_W,
+#       term_spread_30y_10y, term_spread_30y_10y_chg_W
+#
+# Everything else (architecture, optimizer, walk-forward, baselines) is
+# IDENTICAL to v6_03 so the diff measures pure feature lift.
+
+seed: 42
+artifacts_dir: artifacts/reports/v7b_normalized
+
+features:
+  include_ohlcv: true        # turn on per-asset OHLCV features
+  extended_macro: true       # pull yield-curve symbols and derive term spreads
+
+data:
+  kaggle_root: data/raw/kaggle_stock_market
+  macro_cache: data/cache/macro_extended.parquet   # separate from v6 cache
+  start: "2003-01-01"
+  end:   "2020-04-01"
+  extend_via_yfinance: false # apples-to-apples: same window as v6_03
+
+universe:
+  tickers:
+    - AAPL
+    - MSFT
+    - GOOGL
+    - AMZN
+    - FB
+    - NFLX
+    - NVDA
+    - TSLA
+    - ADBE
+    - CRM
+    - ORCL
+    - INTC
+    - CSCO
+    - QCOM
+    - IBM
+    - TXN
+  min_history: 60
+
+regime:
+  n_states: 3
+  covariance_type: full
+  n_iter: 200
+
+model:
+  d_model: 192
+  n_heads: 8
+  n_layers: 5
+  ff_mult: 4
+  dropout: 0.15
+  chol_min_diag: 0.01
+  head_type: factor
+  n_factors: 4
+
+training:
+  window: 60
+  horizon: 5
+  batch_size: 32
+  epochs: 30
+  lr: 0.0003
+  weight_decay: 0.0005
+  grad_clip: 1.0
+  val_fraction: 0.15
+  early_stop_patience: 6
+  device: cpu
+  anchor_lambda: 0.0
+
+cvar:
+  mode: mv
+  risk_aversion: 25.0
+  demean_mu: false
+  alpha: 0.95
+  turnover_lambda: 0.005
+  long_only: true
+  w_min: 0.0
+  w_max: 0.20
+  gross_max: 1.0
+  cash_allowed: false
+  min_invested: 0.0
+  vol_cap_weekly: 0.04
+  solver: CLARABEL
+
+backtest:
+  start: "2005-01-03"
+  end:   "2020-04-01"
+  initial_train_end: "2007-12-31"
+  rebal_freq_days: 5
+  train_freq_days: 5
+  fold_test_days: 252
+  train_lookback_days: null
+  transaction_cost_bps: 2.0
+  shrinkage_alpha: 0.7
+  use_model_mu: false
+  warm_start: true
+  warm_start_lr_scale: 0.5
+  baselines:
+    - equal_weight
+    - inverse_vol
+    - min_variance
+    - max_sharpe
+    - risk_parity
+    - sample_cov_cvar

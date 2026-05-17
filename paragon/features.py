@@ -89,6 +89,22 @@ def build_macro_features(macro: pd.DataFrame, window: int) -> pd.DataFrame:
         cols["credit_spread_proxy"] = spread
         cols["credit_spread_chg_W"] = spread - spread.shift(window)
 
+    # ---- yield-curve features (v7+) ----
+    # Note: yfinance returns yields in tenths of a percent (e.g. TNX=42.0 means
+    # 4.20%), so divide by 100 to get raw percent. Spreads are then in percent.
+    if "TNX" in m and "IRX" in m:
+        cols["term_spread_10y_3m"] = (m["TNX"] - m["IRX"]) / 100.0
+        cols["term_spread_10y_3m_chg_W"] = (
+            (m["TNX"] - m["IRX"]) / 100.0
+            - (m["TNX"].shift(window) - m["IRX"].shift(window)) / 100.0
+        )
+    if "TYX" in m and "TNX" in m:
+        cols["term_spread_30y_10y"] = (m["TYX"] - m["TNX"]) / 100.0
+        cols["term_spread_30y_10y_chg_W"] = (
+            (m["TYX"] - m["TNX"]) / 100.0
+            - (m["TYX"].shift(window) - m["TNX"].shift(window)) / 100.0
+        )
+
     feats = pd.DataFrame(cols)
     return feats
 
@@ -109,6 +125,10 @@ class FeatureBundle:
     macro_feats: pd.DataFrame          # T x M_macro
     regime_probs: pd.DataFrame         # T x k regime posteriors
     mask: pd.DataFrame                 # T x N tradability bool
+    ohlcv_feats: np.ndarray | None = None  # (T, N, F_ohlcv) per-asset OHLCV
+                                           # features. None when not requested
+                                           # so old configs train identically.
+    ohlcv_feature_names: list[str] | None = None
 
     @property
     def tickers(self) -> list[str]:
@@ -118,6 +138,91 @@ class FeatureBundle:
     def dates(self) -> pd.DatetimeIndex:
         return self.returns.index
 
+    @property
+    def n_ohlcv_feats(self) -> int:
+        return 0 if self.ohlcv_feats is None else self.ohlcv_feats.shape[2]
+
+
+# --------------------------------------------------------------------------- #
+# Per-asset OHLCV features (v7+)
+# --------------------------------------------------------------------------- #
+
+def build_ohlcv_features(
+    ohlcv_dict: dict[str, pd.DataFrame],
+    tickers: list[str],
+    dates: pd.DatetimeIndex,
+    short_window: int = 5,
+    vol_z_window: int = 60,
+    zscore_window: int = 252,
+    normalize: bool = True,
+) -> tuple[np.ndarray, list[str]]:
+    """Compute per-asset OHLCV-derived features at each date.
+
+    When ``normalize=True`` (v7b+ default), every feature is rolling-z-scored
+    over a 252-day window so they all sit in roughly [-3, 3] regardless of
+    natural scale. Without normalization (v7 original), vol_z dominated the
+    input projection because its raw magnitude was ~10x bigger than the
+    price-based features, drowning out the others. This was the cause of the
+    v7 apples-to-apples regression vs v6_03.
+
+    Returns
+    -------
+    feats : np.ndarray of shape (T, N, F_ohlcv)
+        For tickers missing from `ohlcv_dict` (or with insufficient data on a
+        given date), the corresponding row/column is zero-filled — the
+        universe mask in FeatureBundle will gate these out anyway.
+    names : list[str]
+        Human-readable names of the F_ohlcv features (for diagnostics).
+    """
+    feature_names = [
+        "hl_range_5d",          # mean of (High-Low)/Close over short_window
+        "intraday_ret_5d",      # mean of (Close-Open)/Open over short_window
+        "gap_ret_5d",           # mean of overnight gap (Open - prev Close)/prev Close
+        "vol_z",                # (Volume_t - mean60d) / std60d
+    ]
+    T = len(dates)
+    N = len(tickers)
+    F = len(feature_names)
+    out = np.zeros((T, N, F), dtype=np.float32)
+
+    for i, tk in enumerate(tickers):
+        if tk not in ohlcv_dict:
+            continue
+        df = ohlcv_dict[tk].reindex(dates)
+        close = df["Close"]
+        open_ = df["Open"]
+        high = df["High"]
+        low = df["Low"]
+        vol = df["Volume"].astype(np.float64)
+
+        hl_range = ((high - low) / close).rolling(short_window, min_periods=1).mean()
+        intraday = ((close - open_) / open_).rolling(short_window, min_periods=1).mean()
+        prev_close = close.shift(1)
+        gap = ((open_ - prev_close) / prev_close).rolling(short_window, min_periods=1).mean()
+        vol_mean = vol.rolling(vol_z_window, min_periods=10).mean()
+        vol_std = vol.rolling(vol_z_window, min_periods=10).std(ddof=0).replace(0, np.nan)
+        vol_z = (vol - vol_mean) / vol_std
+
+        cols = [hl_range, intraday, gap, vol_z]
+        if normalize:
+            # Per-feature rolling z-score so all 4 features live on the same
+            # numeric scale. This prevents vol_z (natural scale ~3-5) from
+            # drowning out hl_range (natural scale ~0.01) in the model's
+            # input projection.
+            normed = []
+            for c in cols:
+                m = c.rolling(zscore_window, min_periods=20).mean()
+                s = c.rolling(zscore_window, min_periods=20).std(ddof=0).replace(0, np.nan)
+                normed.append((c - m) / s)
+            cols = normed
+
+        block = np.stack([c.values.astype(np.float32) for c in cols], axis=1)
+        block = np.clip(block, -5.0, 5.0)
+        block = np.nan_to_num(block, nan=0.0, posinf=0.0, neginf=0.0)
+        out[:, i, :] = block
+
+    return out, feature_names
+
 
 def assemble_bundle(
     prices: pd.DataFrame,
@@ -125,6 +230,7 @@ def assemble_bundle(
     regime_probs: pd.DataFrame,
     mask: pd.DataFrame,
     window: int,
+    ohlcv_dict: dict[str, pd.DataFrame] | None = None,
 ) -> FeatureBundle:
     rets = log_returns(prices)
     vol = rolling_vol(rets, window=window)
@@ -136,10 +242,19 @@ def assemble_bundle(
     regime_probs = regime_probs.reindex(idx).ffill()
     mask = mask.reindex(idx).fillna(False)
 
+    ohlcv_feats = None
+    ohlcv_names = None
+    if ohlcv_dict is not None:
+        ohlcv_feats, ohlcv_names = build_ohlcv_features(
+            ohlcv_dict, tickers=list(prices.columns), dates=idx,
+        )
+
     return FeatureBundle(
         returns=rets.reindex(idx),
         vol=vol.reindex(idx),
         macro_feats=macro_feats,
         regime_probs=regime_probs,
         mask=mask,
+        ohlcv_feats=ohlcv_feats,
+        ohlcv_feature_names=ohlcv_names,
     )

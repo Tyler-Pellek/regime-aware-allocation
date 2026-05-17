@@ -20,9 +20,14 @@ from paragon.backtest.walkforward import (
 )
 from paragon.data import (
     DEFAULT_MACRO_SYMBOLS,
+    EXTENDED_MACRO_SYMBOLS,
+    KAGGLE_CUTOFF,
     align_prices_macro,
     fetch_macro,
+    load_kaggle_ohlcv,
     load_kaggle_prices,
+    load_yfinance_ohlcv,
+    splice_ohlcv,
 )
 from paragon.eval.metrics import cum_return
 from paragon.eval.report import write_report
@@ -49,17 +54,65 @@ def main() -> None:
     set_seed(cfg.seed)
 
     tickers = cfg.universe.tickers or TECH_UNIVERSE
+    use_ohlcv = bool(cfg.get("features", {}).get("include_ohlcv", False)) if hasattr(cfg, "get") else False
+    use_extended_macro = bool(cfg.get("features", {}).get("extended_macro", False)) if hasattr(cfg, "get") else False
+    extend_via_yfinance = bool(cfg.get("data", {}).get("extend_via_yfinance", False)) if hasattr(cfg, "get") else False
 
-    # ---------- 1. Load prices + macro ----------
+    # ---------- 1. Load prices + (optionally) OHLCV ----------
     LOG.info("Loading Kaggle prices for %d tickers ...", len(tickers))
     prices = load_kaggle_prices(
         tickers, kaggle_root=cfg.data.kaggle_root, start=cfg.data.start, end=cfg.data.end,
     )
+
+    ohlcv_dict = None
+    if use_ohlcv:
+        LOG.info("Loading Kaggle OHLCV (v7 features) ...")
+        ohlcv_dict = load_kaggle_ohlcv(
+            tickers, kaggle_root=cfg.data.kaggle_root, start=cfg.data.start, end=cfg.data.end,
+        )
+
+    # Extend forward via yfinance if requested AND end date > Kaggle cutoff
+    if extend_via_yfinance and pd.Timestamp(cfg.data.end) > KAGGLE_CUTOFF:
+        LOG.info("Splicing yfinance extension from %s onward ...", KAGGLE_CUTOFF.date())
+        ext_cache = cfg.data.get("yfinance_cache", "data/cache/yfinance_extension.parquet")
+        yf_dict = load_yfinance_ohlcv(
+            tickers, start=KAGGLE_CUTOFF, end=cfg.data.end, cache_path=ext_cache,
+        )
+        if use_ohlcv:
+            assert ohlcv_dict is not None
+            ohlcv_dict = splice_ohlcv(ohlcv_dict, yf_dict)
+        # Always splice the Adj Close into prices
+        # Build a fresh prices frame from the spliced OHLCV (or from yfinance dict if no Kaggle OHLCV)
+        from paragon.data import _ffill_within_lifespan
+        if ohlcv_dict is not None:
+            new_prices = pd.concat(
+                {tk: df["Adj Close"] for tk, df in ohlcv_dict.items() if "Adj Close" in df.columns},
+                axis=1,
+            )
+        else:
+            # Splice prices manually: combine Kaggle pre-cutoff + yfinance post-cutoff Adj Close
+            spliced = splice_ohlcv(
+                {tk: df for tk, df in load_kaggle_ohlcv(tickers, kaggle_root=cfg.data.kaggle_root,
+                                                        start=cfg.data.start, end=cfg.data.end).items()},
+                yf_dict,
+            )
+            new_prices = pd.concat(
+                {tk: df["Adj Close"] for tk, df in spliced.items() if "Adj Close" in df.columns},
+                axis=1,
+            )
+        # Restrict to business days, ffill within lifespan
+        bdays = pd.bdate_range(new_prices.index.min(), new_prices.index.max())
+        new_prices = new_prices.reindex(bdays)
+        new_prices = new_prices.apply(_ffill_within_lifespan, axis=0)
+        new_prices.index.name = "Date"
+        prices = new_prices.reindex(columns=tickers)  # keep canonical order
+
     LOG.info("Prices shape: %s, range %s -> %s", prices.shape, prices.index.min().date(), prices.index.max().date())
 
-    LOG.info("Fetching macro indicators ...")
+    macro_symbols = EXTENDED_MACRO_SYMBOLS if use_extended_macro else DEFAULT_MACRO_SYMBOLS
+    LOG.info("Fetching macro indicators (%d symbols, extended=%s) ...", len(macro_symbols), use_extended_macro)
     macro = fetch_macro(
-        symbols=DEFAULT_MACRO_SYMBOLS, start=cfg.data.start, end=cfg.data.end,
+        symbols=macro_symbols, start=cfg.data.start, end=cfg.data.end,
         cache_path=cfg.data.macro_cache, refresh=False,
     )
     prices, macro = align_prices_macro(prices, macro)
@@ -147,6 +200,7 @@ def main() -> None:
         cvar_cfg=cvar_cfg,
         hmm_cfg=hmm_cfg,
         artifacts_dir=cfg.artifacts_dir,
+        ohlcv_dict=ohlcv_dict,
     )
     LOG.info("Strategy summary: %s", artifacts.summary)
 
