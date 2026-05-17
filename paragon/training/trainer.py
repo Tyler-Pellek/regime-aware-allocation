@@ -11,7 +11,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from ..features import FeatureBundle
-from ..model.cholesky import gaussian_nll, sigma_anchor_loss
+from ..model.cholesky import gaussian_nll, realized_cov_loss, sigma_anchor_loss
 from ..model.transformer import CrossAssetTransformer, TransformerConfig
 from ..utils.logging import get_logger
 from .dataset import SnapshotDataset, collate
@@ -34,6 +34,13 @@ class TrainConfig:
     anchor_lambda: float = 0.0   # weight on the Sigma-anchor auxiliary loss
                                  # (0 = pure NLL, 1.0+ = strong shrinkage to
                                  # rolling sample covariance). 0.1-0.5 typical.
+    loss_type: str = "nll"       # "nll" | "realized_cov" | "hybrid"
+                                 # nll          -> Gaussian NLL only (v1-v8)
+                                 # realized_cov -> direct supervision of Sigma
+                                 #                 against forward-realized cov
+                                 # hybrid       -> alpha*realized_cov + (1-alpha)*nll
+    realized_cov_horizon: int = 20  # forward window for realized covariance target
+    realized_cov_weight: float = 0.7  # hybrid weight on realized_cov term
 
 
 def select_device(preferred: str) -> torch.device:
@@ -76,8 +83,9 @@ def train_model(
     train_dates, val_dates = split_train_val(decision_dates, train_cfg.val_fraction)
     LOG.info("Train snapshots: %d   Val snapshots: %d", len(train_dates), len(val_dates))
 
-    train_ds = SnapshotDataset(bundle, train_dates, train_cfg.window, train_cfg.horizon)
-    val_ds = SnapshotDataset(bundle, val_dates, train_cfg.window, train_cfg.horizon)
+    h_cov = train_cfg.realized_cov_horizon if train_cfg.loss_type in ("realized_cov", "hybrid") else None
+    train_ds = SnapshotDataset(bundle, train_dates, train_cfg.window, train_cfg.horizon, horizon_cov=h_cov)
+    val_ds = SnapshotDataset(bundle, val_dates, train_cfg.window, train_cfg.horizon, horizon_cov=h_cov)
     if len(train_ds) == 0:
         raise RuntimeError("Empty training dataset — check decision_dates / window / horizon.")
 
@@ -112,6 +120,25 @@ def train_model(
     best_state = None
     bad_epochs = 0
     use_anchor = train_cfg.anchor_lambda > 0
+    loss_type = train_cfg.loss_type
+    rc_w = train_cfg.realized_cov_weight if loss_type == "hybrid" else (
+        1.0 if loss_type == "realized_cov" else 0.0)
+
+    def compute_loss(out, batch):
+        nll = gaussian_nll(out["mu"], out["L"], batch["target"], batch["target_mask"])
+        if loss_type == "nll":
+            base = nll
+        else:
+            assert "realized_cov" in batch, "realized_cov target missing — check dataset wiring"
+            rcl = realized_cov_loss(out["L"], batch["realized_cov"], batch["target_mask"])
+            if loss_type == "realized_cov":
+                base = rcl
+            else:                                       # hybrid
+                base = rc_w * rcl + (1.0 - rc_w) * nll
+        if use_anchor:
+            aux = sigma_anchor_loss(out["L"], batch["sigma_baseline"], batch["mask"])
+            return base + train_cfg.anchor_lambda * aux, nll, base
+        return base, nll, base
 
     for epoch in range(1, train_cfg.epochs + 1):
         model.train()
@@ -119,15 +146,7 @@ def train_model(
         for batch in train_loader:
             batch = {k: v.to(device) for k, v in batch.items()}
             out = model(batch["asset_feats"], batch["ctx_feats"], batch["mask"])
-            nll = gaussian_nll(out["mu"], out["L"], batch["target"], batch["target_mask"])
-            if use_anchor:
-                aux = sigma_anchor_loss(
-                    out["L"], batch["sigma_baseline"], batch["mask"]
-                )
-                loss = nll + train_cfg.anchor_lambda * aux
-                total_anchor += float(aux.item())
-            else:
-                loss = nll
+            loss, nll, _base = compute_loss(out, batch)
             opt.zero_grad(set_to_none=True)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), train_cfg.grad_clip)
@@ -149,14 +168,7 @@ def train_model(
                 for batch in val_loader:
                     batch = {k: v.to(device) for k, v in batch.items()}
                     out = model(batch["asset_feats"], batch["ctx_feats"], batch["mask"])
-                    vnll = gaussian_nll(out["mu"], out["L"], batch["target"], batch["target_mask"])
-                    if use_anchor:
-                        vaux = sigma_anchor_loss(
-                            out["L"], batch["sigma_baseline"], batch["mask"]
-                        )
-                        vloss = vnll + train_cfg.anchor_lambda * vaux
-                    else:
-                        vloss = vnll
+                    vloss, _vnll, _ = compute_loss(out, batch)
                     vtotal += float(vloss.item())
                     vn += 1
             val_loss = vtotal / max(vn, 1)

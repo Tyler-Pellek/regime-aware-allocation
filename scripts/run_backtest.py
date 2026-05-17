@@ -137,6 +137,9 @@ def main() -> None:
         early_stop_patience=cfg.training.early_stop_patience,
         device=cfg.training.device,
         anchor_lambda=cfg.training.get("anchor_lambda", 0.0),
+        loss_type=cfg.training.get("loss_type", "nll"),
+        realized_cov_horizon=cfg.training.get("realized_cov_horizon", 20),
+        realized_cov_weight=cfg.training.get("realized_cov_weight", 0.7),
     )
     cvar_cfg = CVaRConfig(
         mode=cfg.cvar.get("mode", "cvar"),
@@ -172,6 +175,7 @@ def main() -> None:
         warm_start=cfg.backtest.get("warm_start", False),
         warm_start_lr_scale=cfg.backtest.get("warm_start_lr_scale", 0.5),
         pretrained_checkpoint=cfg.backtest.get("pretrained_checkpoint", None),
+        n_ensemble_seeds=cfg.backtest.get("n_ensemble_seeds", 1),
     )
 
     def make_model_cfg(F_asset: int, F_ctx: int, N: int) -> TransformerConfig:

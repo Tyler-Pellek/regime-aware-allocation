@@ -94,6 +94,13 @@ class WalkForwardConfig:
                                               # random init. Subsequent folds
                                               # warm-start from fold N-1 as
                                               # usual.
+    n_ensemble_seeds: int = 1                 # train N independent models per
+                                              # fold (seeds 0..N-1) and average
+                                              # their Sigma predictions at
+                                              # inference time. Variance
+                                              # reduction with no fancy
+                                              # architecture. n=1 -> single
+                                              # model (original behavior).
 
 
 @dataclass
@@ -180,7 +187,7 @@ def _refit_hmm(
 
 @torch.no_grad()
 def _infer_one(
-    model: CrossAssetTransformer,
+    models: list[CrossAssetTransformer] | CrossAssetTransformer,
     bundle: FeatureBundle,
     date: pd.Timestamp,
     window: int,
@@ -200,12 +207,20 @@ def _infer_one(
     fix: if the model's prediction is unreliable in a regime it hasn't seen,
     the sample-cov term keeps the optimizer's inputs sensible.
     """
+    if not isinstance(models, list):
+        models = [models]
     snap = build_snapshot(bundle, date, window=window, prev_w=prev_w)
     batch = collate_snapshots([snap])
     batch = {k: v.to(device) for k, v in batch.items()}
-    out = model(batch["asset_feats"], batch["ctx_feats"], batch["mask"])
-    Sigma_model = sigma_from_L(out["L"], batch["mask"])[0].cpu().numpy().astype(np.float64)
-    mu_model = out["mu"][0].cpu().numpy().astype(np.float64)
+    sigmas = []
+    mus = []
+    for model in models:
+        out = model(batch["asset_feats"], batch["ctx_feats"], batch["mask"])
+        sigmas.append(sigma_from_L(out["L"], batch["mask"])[0].cpu().numpy().astype(np.float64))
+        mus.append(out["mu"][0].cpu().numpy().astype(np.float64))
+    # Ensemble = mean in covariance space (sum of PSDs is PSD)
+    Sigma_model = np.mean(sigmas, axis=0)
+    mu_model = np.mean(mus, axis=0)
     mask = snap.mask
 
     # ---- Sigma path (model or shrunk-to-sample) ----
@@ -297,15 +312,17 @@ def run_walk_forward(
     N = p.shape[1]
     prev_w = np.zeros(N)
     device = None  # set after first model train
-    warm_state: dict | None = None   # carries previous fold's model weights
+    n_seeds = max(1, cfg.n_ensemble_seeds)
+    warm_states: list[dict | None] = [None] * n_seeds   # one chain per seed
 
-    # Optional pretrained backbone — fold 0 starts from this instead of random init.
+    # Optional pretrained backbone — fold 0 of every seed starts from this.
     if cfg.pretrained_checkpoint:
         ck = Path(cfg.pretrained_checkpoint)
         if ck.is_file():
-            LOG.info("Loading pretrained backbone from %s", ck)
+            LOG.info("Loading pretrained backbone from %s (shared across %d ensemble seeds)",
+                     ck, n_seeds)
             blob = torch.load(ck, map_location="cpu", weights_only=False)
-            warm_state = blob["state_dict"]
+            warm_states = [blob["state_dict"] for _ in range(n_seeds)]
         else:
             LOG.warning("pretrained_checkpoint %s not found — falling back to random init.", ck)
 
@@ -347,30 +364,43 @@ def run_walk_forward(
         F_asset = train_cfg.window + 2 + bundle.n_ohlcv_feats
         F_ctx = bundle.regime_probs.shape[1] + bundle.macro_feats.shape[1]
         model_cfg = model_cfg_factory(F_asset, F_ctx, N)
-        # warm_state precedence:
-        #   fold 0 + pretrained_checkpoint  -> pretrained backbone
-        #   fold N>0 + warm_start            -> previous fold's weights
-        #   otherwise                         -> random init
-        if fold_idx == 0:
-            init_state = warm_state           # may be from pretrained_checkpoint
-        elif cfg.warm_start:
-            init_state = warm_state           # carried from previous fold
-        else:
-            init_state = None
-        model, _hist = train_model(
-            bundle=bundle,
-            decision_dates=train_dates,
-            model_cfg=model_cfg,
-            train_cfg=train_cfg,
-            save_path=(artifacts_dir / f"model_fold{fold_idx}.pt") if artifacts_dir else None,
-            warm_start_state=init_state,
-            warm_start_lr_scale=cfg.warm_start_lr_scale,
-        )
-        if cfg.warm_start or (fold_idx == 0 and cfg.pretrained_checkpoint):
-            warm_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+        # Train N ensemble seeds in sequence. Each seed has its own warm-start
+        # chain (warm_states[i]) so the ensemble has 5 parallel histories.
+        models: list[CrossAssetTransformer] = []
+        for seed_i in range(n_seeds):
+            # warm_state precedence per seed:
+            #   fold 0  + pretrained_checkpoint  -> pretrained backbone
+            #   fold N>0 + warm_start             -> previous fold's seed_i weights
+            #   otherwise                          -> random init (different seed!)
+            if fold_idx == 0:
+                init_state = warm_states[seed_i]
+            elif cfg.warm_start:
+                init_state = warm_states[seed_i]
+            else:
+                init_state = None
+            # Bump RNG by seed_i so each ensemble member has different init.
+            torch.manual_seed(42 + seed_i + 1000 * fold_idx)
+            save_path = None
+            if artifacts_dir:
+                suffix = f"_seed{seed_i}" if n_seeds > 1 else ""
+                save_path = artifacts_dir / f"model_fold{fold_idx}{suffix}.pt"
+            seed_model, _hist = train_model(
+                bundle=bundle,
+                decision_dates=train_dates,
+                model_cfg=model_cfg,
+                train_cfg=train_cfg,
+                save_path=save_path,
+                warm_start_state=init_state,
+                warm_start_lr_scale=cfg.warm_start_lr_scale,
+            )
+            models.append(seed_model)
+            if cfg.warm_start or (fold_idx == 0 and cfg.pretrained_checkpoint):
+                warm_states[seed_i] = {k: v.detach().cpu().clone()
+                                        for k, v in seed_model.state_dict().items()}
         from ..training.trainer import select_device
         device = select_device(train_cfg.device)
-        model.eval()
+        for _seed_model in models:
+            _seed_model.eval()
 
         # ----- 5. Roll the test window with periodic rebalances -----
         test_dates = _decision_dates_in_window(p.index, train_end, test_end, cfg.rebal_freq_days)
@@ -381,7 +411,7 @@ def run_walk_forward(
 
         for i, d in enumerate(test_dates):
             mu, sigma, mask = _infer_one(
-                model, bundle, d, train_cfg.window, prev_w, device,
+                models, bundle, d, train_cfg.window, prev_w, device,
                 horizon=train_cfg.horizon, shrinkage_alpha=cfg.shrinkage_alpha,
                 use_model_mu=cfg.use_model_mu,
             )

@@ -41,6 +41,12 @@ class TrainSample:
     target_mask: np.ndarray       # (N,) bool — asset is active at both t and t+h
     sigma_baseline: np.ndarray    # (N, N) rolling sample covariance, h-scaled.
                                   # Used as a soft prior the model is anchored to.
+    realized_cov: np.ndarray | None = None
+                                  # (N, N) FORWARD realized covariance over
+                                  # horizon_cov days (e.g. 20 for monthly).
+                                  # Only computed when horizon_cov is provided
+                                  # to the SnapshotDataset. Used by v9+
+                                  # realized-cov training objective.
 
 
 class SnapshotDataset(Dataset):
@@ -57,10 +63,13 @@ class SnapshotDataset(Dataset):
         decision_dates: pd.DatetimeIndex,
         window: int,
         horizon: int,
+        horizon_cov: int | None = None,
     ):
         self.bundle = bundle
         self.window = window
         self.horizon = horizon
+        self.horizon_cov = horizon_cov
+        max_needed = horizon if horizon_cov is None else max(horizon, horizon_cov)
         # Filter to dates with enough history and enough forward.
         n = len(bundle.dates)
         valid = []
@@ -70,7 +79,7 @@ class SnapshotDataset(Dataset):
             pos = bundle.dates.get_loc(d)
             if pos < window:
                 continue
-            if pos + horizon >= n:
+            if pos + max_needed >= n:
                 continue
             valid.append(d)
         self.decision_dates = pd.DatetimeIndex(valid)
@@ -104,7 +113,31 @@ class SnapshotDataset(Dataset):
             sigma_baseline[inactive, :] = 0.0
             sigma_baseline[:, inactive] = 0.0
             sigma_baseline[inactive, inactive] = 1.0
-        return TrainSample(snap, target, target_mask, sigma_baseline)
+
+        # Forward realized covariance (v9+ training target). Computed over the
+        # next horizon_cov days, scaled to that horizon. Survival is checked
+        # over the same window so that assets which don't survive get masked
+        # out of the realized-cov loss via target_mask_cov.
+        realized_cov = None
+        target_mask_cov_arr = target_mask
+        if self.horizon_cov is not None:
+            fwd_cov = self.bundle.returns.iloc[pos + 1 : pos + 1 + self.horizon_cov].values
+            survives_cov = ~np.isnan(fwd_cov).any(axis=0)
+            fwd_cov_clean = np.nan_to_num(fwd_cov, nan=0.0)
+            # Realized cov: 1/(n-1) sum (r - mean)(r - mean)^T scaled to horizon
+            # np.cov already does the bias-corrected version; we scale by
+            # horizon_cov so the magnitude matches a Sigma-over-horizon target.
+            rc = np.cov(fwd_cov_clean.T, ddof=0) * self.horizon_cov
+            rc = rc.astype(np.float32)
+            inactive_cov = ~(snap.mask & survives_cov)
+            if inactive_cov.any():
+                rc[inactive_cov, :] = 0.0
+                rc[:, inactive_cov] = 0.0
+                rc[inactive_cov, inactive_cov] = 1.0
+            realized_cov = rc
+            target_mask_cov_arr = (snap.mask & survives_cov).astype(bool)
+
+        return TrainSample(snap, target, target_mask_cov_arr, sigma_baseline, realized_cov)
 
 
 def collate(batch: list[TrainSample]) -> dict[str, torch.Tensor]:
@@ -115,4 +148,8 @@ def collate(batch: list[TrainSample]) -> dict[str, torch.Tensor]:
     out["sigma_baseline"] = torch.from_numpy(
         np.stack([b.sigma_baseline for b in batch], axis=0)
     )
+    if batch[0].realized_cov is not None:
+        out["realized_cov"] = torch.from_numpy(
+            np.stack([b.realized_cov for b in batch], axis=0)
+        )
     return out

@@ -15,15 +15,17 @@ import pandas as pd
 # (label, report_dir, series_name, color, lw)
 SERIES = [
     # Extended-window strategies (2008-2024)
-    ("Paragon v7b EXTENDED (2008-2024)",
+    ("Paragon v7b EXTENDED (WINNER, 2008-2024)",
      "v7b_extended",                "strategy",        "#9d0208", 3.0),
+    ("Paragon v9 realized-cov + ensemble EXTENDED (regressed)",
+     "v9_extended",                 "strategy",        "#6a040f", 2.0),
     ("Paragon v8 pretrained EXTENDED",
-     "v8_pretrained_extended",      "strategy",        "#370617", 2.5),
+     "v8_pretrained_extended",      "strategy",        "#370617", 2.0),
     # Apples-to-apples winners (2008-2020)
     ("Paragon v7b (2008-2020)",
-     "v7b_normalized",              "strategy",        "#e85d04", 1.8),
+     "v7b_normalized",              "strategy",        "#e85d04", 1.6),
     ("Paragon v6_03 (2008-2020)",
-     "v6_03_winner_full_baselines", "strategy",        "#dc2f02", 1.4),
+     "v6_03_winner_full_baselines", "strategy",        "#dc2f02", 1.2),
     # Baselines from the EXTENDED period
     ("Max Sharpe (tangency) [2008-2024]",
      "v7b_extended",                "max_sharpe",      "#1f77b4", 1.3),

@@ -92,6 +92,36 @@ def gaussian_nll(
     return torch.stack(losses).mean()
 
 
+def realized_cov_loss(
+    L: Tensor, realized_cov: Tensor, mask: Tensor, eps: float = 1e-6
+) -> Tensor:
+    """Direct supervision of predicted Sigma against FORWARD realized covariance.
+
+    This is the v9+ replacement for Gaussian NLL. The NLL target is a single
+    next-h-day return draw, which gives the model an extremely noisy gradient
+    signal for what Sigma should be. Realized covariance over a longer
+    forward window (e.g. 20 days) is a much denser supervision target — the
+    model is told directly what the right Sigma looks like.
+
+    L              : (B, N, N)  predicted Cholesky factor
+    realized_cov   : (B, N, N)  forward realized covariance (computed in the dataset)
+    mask           : (B, N)     active assets
+
+    Loss is the relative Frobenius distance restricted to the active sub-block:
+        L_rc = mean_b [ ||Sigma_pred - realized||_F^2 / (||realized||_F^2 + eps) ]
+
+    Scale-invariant in the magnitude of realized cov, so works regardless of
+    horizon or asset universe.
+    """
+    Sigma_pred = L @ L.transpose(-1, -2)
+    m = mask.unsqueeze(-1).float() * mask.unsqueeze(-2).float()
+    diff = (Sigma_pred - realized_cov) * m
+    base = realized_cov * m
+    num = (diff ** 2).sum(dim=(-1, -2))
+    den = (base ** 2).sum(dim=(-1, -2)) + eps
+    return (num / den).mean()
+
+
 def sigma_anchor_loss(
     L: Tensor, sigma_baseline: Tensor, mask: Tensor, eps: float = 1e-6
 ) -> Tensor:
