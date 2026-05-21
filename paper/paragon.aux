@@ -1,0 +1,125 @@
+\relax 
+\providecommand\hyper@newdestlabel[2]{}
+\providecommand\HyField@AuxAddToFields[1]{}
+\providecommand\HyField@AuxAddToCoFields[2]{}
+\citation{markowitz1952}
+\citation{bollerslev1986}
+\citation{longin2001}
+\citation{engle2002,bauwens2006}
+\citation{maillard2010}
+\citation{hamilton1989,ang2002}
+\citation{ledoit2004}
+\citation{li2021,wang2022}
+\citation{donti2017,butler2023}
+\@writefile{toc}{\contentsline {section}{\numberline {1}Introduction}{1}{section.1}\protected@file@percent }
+\newlabel{sec:intro}{{1}{1}{Introduction}{section.1}{}}
+\citation{fama1993}
+\@writefile{toc}{\contentsline {section}{\numberline {2}Methodology}{2}{section.2}\protected@file@percent }
+\newlabel{sec:method}{{2}{2}{Methodology}{section.2}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.1}Setup}{2}{subsection.2.1}\protected@file@percent }
+\newlabel{sec:setup}{{2.1}{2}{Setup}{subsection.2.1}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.2}Cross-Asset Transformer}{2}{subsection.2.2}\protected@file@percent }
+\newlabel{sec:architecture}{{2.2}{2}{Cross-Asset Transformer}{subsection.2.2}{}}
+\@writefile{toc}{\contentsline {paragraph}{Context token features.}{2}{section*.1}\protected@file@percent }
+\citation{vaswani2017,xiong2020}
+\@writefile{toc}{\contentsline {paragraph}{Asset token features.}{3}{section*.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Projection and self-attention.}{3}{section*.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{What is learned.}{3}{section*.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.3}Factor-structured covariance head}{3}{subsection.2.3}\protected@file@percent }
+\newlabel{sec:factor_head}{{2.3}{3}{Factor-structured covariance head}{subsection.2.3}{}}
+\newlabel{eq:factor}{{2}{3}{Factor-structured covariance head}{equation.2.2}{}}
+\@writefile{toc}{\contentsline {paragraph}{Loadings.}{3}{section*.5}\protected@file@percent }
+\citation{ledoit2004}
+\@writefile{toc}{\contentsline {paragraph}{Idiosyncratic variance.}{4}{section*.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Regime-conditional factor covariance.}{4}{section*.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Cholesky for downstream operations.}{4}{section*.8}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Mean head.}{4}{section*.9}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.4}Training objective}{4}{subsection.2.4}\protected@file@percent }
+\newlabel{sec:loss}{{2.4}{4}{Training objective}{subsection.2.4}{}}
+\newlabel{eq:nll}{{4}{4}{Training objective}{equation.2.4}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.5}Walk-forward training with warm-start fine-tuning}{4}{subsection.2.5}\protected@file@percent }
+\newlabel{sec:walkforward}{{2.5}{4}{Walk-forward training with warm-start fine-tuning}{subsection.2.5}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.6}Inference-time covariance shrinkage}{4}{subsection.2.6}\protected@file@percent }
+\newlabel{sec:shrinkage}{{2.6}{4}{Inference-time covariance shrinkage}{subsection.2.6}{}}
+\newlabel{eq:shrinkage}{{5}{4}{Inference-time covariance shrinkage}{equation.2.5}{}}
+\citation{clarabel}
+\citation{cvxpy2016}
+\citation{yfinance}
+\citation{maillard2010}
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.7}Portfolio construction}{5}{subsection.2.7}\protected@file@percent }
+\newlabel{sec:portfolio}{{2.7}{5}{Portfolio construction}{subsection.2.7}{}}
+\newlabel{eq:mu_sample}{{6}{5}{Portfolio construction}{equation.2.6}{}}
+\newlabel{eq:opt}{{7}{5}{Portfolio construction}{equation.2.7}{}}
+\newlabel{sec:training_use_mu}{{2.7}{5}{Rationale for the sample-mean signal}{section*.10}{}}
+\@writefile{toc}{\contentsline {paragraph}{Rationale for the sample-mean signal.}{5}{section*.10}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {3}Experimental setup}{5}{section.3}\protected@file@percent }
+\newlabel{sec:experiments}{{3}{5}{Experimental setup}{section.3}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.1}Universe and data}{5}{subsection.3.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.2}Walk-forward protocol}{5}{subsection.3.2}\protected@file@percent }
+\newlabel{sec:wf}{{3.2}{5}{Walk-forward protocol}{subsection.3.2}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.3}Baselines}{6}{subsection.3.3}\protected@file@percent }
+\newlabel{sec:baselines}{{3.3}{6}{Baselines}{subsection.3.3}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.4}Evaluation metrics}{6}{subsection.3.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {4}Results}{6}{section.4}\protected@file@percent }
+\newlabel{sec:results}{{4}{6}{Results}{section.4}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.1}Headline metrics}{6}{subsection.4.1}\protected@file@percent }
+\newlabel{sec:headline}{{4.1}{6}{Headline metrics}{subsection.4.1}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces Out-of-sample performance, 2008-01 to 2024-12 (18 walk-forward folds, 4{,}417 OOS days).}}{6}{table.caption.11}\protected@file@percent }
+\providecommand*\caption@xref[2]{\@setref\relax\@undefined{#1}}
+\newlabel{tab:headline}{{1}{6}{Out-of-sample performance, 2008-01 to 2024-12 (18 walk-forward folds, 4{,}417 OOS days)}{table.caption.11}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.2}Equity curves and drawdown}{6}{subsection.4.2}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces Out-of-sample equity curves on a logarithmic vertical axis, start $= \$1$. The production strategy is plotted in black against the seven baselines. The long-only tangency baseline (\texttt  {max\_sharpe}, blue) terminates at higher cumulative wealth but realizes a $-57.6\%$ maximum drawdown versus the strategy's $-25.1\%$ (cf.~Figure~\ref {fig:drawdown} and Table~\ref {tab:headline}).}}{7}{figure.caption.12}\protected@file@percent }
+\newlabel{fig:equity}{{1}{7}{Out-of-sample equity curves on a logarithmic vertical axis, start $= \$1$. The production strategy is plotted in black against the seven baselines. The long-only tangency baseline (\texttt {max\_sharpe}, blue) terminates at higher cumulative wealth but realizes a $-57.6\%$ maximum drawdown versus the strategy's $-25.1\%$ (cf.~Figure~\ref {fig:drawdown} and Table~\ref {tab:headline})}{figure.caption.12}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.3}Risk-adjusted ranking}{7}{subsection.4.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.4}Regime overlay}{7}{subsection.4.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.5}Portfolio composition}{7}{subsection.4.5}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces Drawdown profiles. The strategy's maximum drawdown of $-25.06\%$ occurs on 2020-06-11 during the COVID-19 dislocation, against SPY's peak-to-trough drawdown of $-55.19\%$ over the sample. The strategy traverses the 2008 global financial crisis with a maximum drawdown of only $-4.5\%$.}}{8}{figure.caption.13}\protected@file@percent }
+\newlabel{fig:drawdown}{{2}{8}{Drawdown profiles. The strategy's maximum drawdown of $-25.06\%$ occurs on 2020-06-11 during the COVID-19 dislocation, against SPY's peak-to-trough drawdown of $-55.19\%$ over the sample. The strategy traverses the 2008 global financial crisis with a maximum drawdown of only $-4.5\%$}{figure.caption.13}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {5}Discussion}{8}{section.5}\protected@file@percent }
+\newlabel{sec:discussion}{{5}{8}{Discussion}{section.5}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.1}Sources of out-of-sample performance}{8}{subsection.5.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.2}Why the sample-mean signal is preferred}{8}{subsection.5.2}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces Cross-strategy comparison on Sharpe (left panel) and Calmar (right panel) over the common out-of-sample window.}}{9}{figure.caption.14}\protected@file@percent }
+\newlabel{fig:metrics}{{3}{9}{Cross-strategy comparison on Sharpe (left panel) and Calmar (right panel) over the common out-of-sample window}{figure.caption.14}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.3}Robustness to ablations}{9}{subsection.5.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.4}Limitations}{9}{subsection.5.4}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {4}{\ignorespaces Top: out-of-sample strategy equity (log scale). Bottom: posterior probabilities of the three-state Hidden Markov Model fit on the aggregate market signal. States are reordered so that state $0$ is the lowest-volatility regime and state $2$ is the highest.}}{10}{figure.caption.15}\protected@file@percent }
+\newlabel{fig:regime}{{4}{10}{Top: out-of-sample strategy equity (log scale). Bottom: posterior probabilities of the three-state Hidden Markov Model fit on the aggregate market signal. States are reordered so that state $0$ is the lowest-volatility regime and state $2$ is the highest}{figure.caption.15}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {6}Conclusion}{10}{section.6}\protected@file@percent }
+\newlabel{sec:conclusion}{{6}{10}{Conclusion}{section.6}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {5}{\ignorespaces Out-of-sample portfolio weights through time (vertical axis: ticker, horizontal axis: rebalance date). Per-asset cap $w_{\max } = 0.20$; average active positions per rebalance is $6.72$; annualized L1 turnover is $10.58$.}}{11}{figure.caption.16}\protected@file@percent }
+\newlabel{fig:weights}{{5}{11}{Out-of-sample portfolio weights through time (vertical axis: ticker, horizontal axis: rebalance date). Per-asset cap $w_{\max } = 0.20$; average active positions per rebalance is $6.72$; annualized L1 turnover is $10.58$}{figure.caption.16}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {A}Ablation study}{11}{appendix.A}\protected@file@percent }
+\newlabel{app:ablation}{{A}{11}{Ablation study}{appendix.A}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces Mean-signal substitutions (input to the optimizer's expected-return vector).}}{11}{table.caption.17}\protected@file@percent }
+\newlabel{tab:ablation_signal}{{2}{11}{Mean-signal substitutions (input to the optimizer's expected-return vector)}{table.caption.17}{}}
+\bibcite{ang2002}{{1}{2002}{{Ang and Bekaert}}{{}}}
+\bibcite{bauwens2006}{{2}{2006}{{Bauwens et al.}}{{}}}
+\bibcite{bollerslev1986}{{3}{1986}{{Bollerslev}}{{}}}
+\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces Optimizer-formulation substitutions.}}{12}{table.caption.18}\protected@file@percent }
+\newlabel{tab:ablation_opt}{{3}{12}{Optimizer-formulation substitutions}{table.caption.18}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {4}{\ignorespaces Architectural and training-procedure modifications.}}{12}{table.caption.19}\protected@file@percent }
+\newlabel{tab:ablation_arch}{{4}{12}{Architectural and training-procedure modifications}{table.caption.19}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {B}Hyperparameter settings}{12}{appendix.B}\protected@file@percent }
+\newlabel{app:hyperparams}{{B}{12}{Hyperparameter settings}{appendix.B}{}}
+\bibcite{butler2023}{{4}{2023}{{Butler and Kwon}}{{}}}
+\bibcite{clarabel}{{5}{2024}{{Goulart and Chen}}{{}}}
+\bibcite{cvxpy2016}{{6}{2016}{{Diamond and Boyd}}{{}}}
+\bibcite{donti2017}{{7}{2017}{{Donti et al.}}{{}}}
+\bibcite{engle2002}{{8}{2002}{{Engle}}{{}}}
+\bibcite{fama1993}{{9}{1993}{{Fama and French}}{{}}}
+\@writefile{lot}{\contentsline {table}{\numberline {5}{\ignorespaces Production hyperparameter settings.}}{13}{table.caption.20}\protected@file@percent }
+\newlabel{tab:hyperparams}{{5}{13}{Production hyperparameter settings}{table.caption.20}{}}
+\bibcite{hamilton1989}{{10}{1989}{{Hamilton}}{{}}}
+\bibcite{jegadeesh1993}{{11}{1993}{{Jegadeesh and Titman}}{{}}}
+\bibcite{ledoit2004}{{12}{2004}{{Ledoit and Wolf}}{{}}}
+\bibcite{li2021}{{13}{2021}{{Li et al.}}{{}}}
+\bibcite{longin2001}{{14}{2001}{{Longin and Solnik}}{{}}}
+\bibcite{maillard2010}{{15}{2010}{{Maillard et al.}}{{}}}
+\bibcite{markowitz1952}{{16}{1952}{{Markowitz}}{{}}}
+\bibcite{paragonmemo}{{17}{2025}{{Pellek}}{{}}}
+\bibcite{vaswani2017}{{18}{2017}{{Vaswani et al.}}{{}}}
+\bibcite{wang2022}{{19}{2022}{{Wang et al.}}{{}}}
+\bibcite{xiong2020}{{20}{2020}{{Xiong et al.}}{{}}}
+\bibcite{yfinance}{{21}{2024}{{Yahoo Finance}}{{}}}
+\gdef \@abspage@last{14}
