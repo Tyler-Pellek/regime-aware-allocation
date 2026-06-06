@@ -16,3 +16,6 @@ artifacts/figures/*
 
 .DS_Store
 *.log
+
+# Claude Code local settings
+.claude/
